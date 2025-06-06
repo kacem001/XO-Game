@@ -10,9 +10,13 @@ const io = socketIo(server, {
     cors: {
         origin: "*",
         methods: ["GET", "POST"],
-        credentials: true
+        credentials: true,
+        allowedHeaders: ["Content-Type"]
     },
-    transports: ['websocket', 'polling']
+    transports: ['websocket', 'polling'],
+    pingTimeout: 60000,
+    pingInterval: 25000,
+    allowEIO3: true
 });
 
 const PORT = process.env.PORT || 3000;
@@ -25,6 +29,16 @@ app.use(express.static(path.join(__dirname, '..')));
 // Serve the main page
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, '..', 'index.html'));
+});
+
+// Test endpoint
+app.get('/test', (req, res) => {
+    res.json({ 
+        message: 'Server is working!', 
+        time: new Date(),
+        activeRooms: gameRooms.size,
+        activePlayers: playerSockets.size
+    });
 });
 
 // Game rooms storage
@@ -165,6 +179,9 @@ io.on('connection', (socket) => {
 
     // Store socket reference
     playerSockets.set(socket.id, socket);
+    
+    // Send connection confirmation
+    socket.emit('connected', { message: 'Connected successfully!' });
 
     socket.on('create_room', (playerData) => {
         try {
@@ -185,12 +202,13 @@ io.on('connection', (socket) => {
 
             socket.emit('room_created', {
                 roomId,
-                host: host
+                host: host,
+                message: 'Room created successfully!'
             });
 
         } catch (error) {
             console.error('Error creating room:', error);
-            socket.emit('room_error', { message: 'Failed to create room' });
+            socket.emit('room_error', { message: 'Failed to create room: ' + error.message });
         }
     });
 
@@ -200,11 +218,13 @@ io.on('connection', (socket) => {
             const room = gameRooms.get(roomId);
 
             if (!room) {
+                console.log(`Room ${roomId} not found`);
                 socket.emit('room_error', { message: 'Room not found' });
                 return;
             }
 
             if (room.isFull()) {
+                console.log(`Room ${roomId} is full`);
                 socket.emit('room_full');
                 return;
             }
@@ -229,7 +249,8 @@ io.on('connection', (socket) => {
                     board: room.gameBoard,
                     currentPlayer: room.currentPlayer,
                     scores: room.scores
-                }
+                },
+                message: 'Successfully joined room!'
             });
 
             // Notify the host that someone joined
@@ -239,12 +260,13 @@ io.on('connection', (socket) => {
                     board: room.gameBoard,
                     currentPlayer: room.currentPlayer,
                     scores: room.scores
-                }
+                },
+                message: `${player.name} joined the room!`
             });
 
         } catch (error) {
             console.error('Error joining room:', error);
-            socket.emit('room_error', { message: 'Failed to join room' });
+            socket.emit('room_error', { message: 'Failed to join room: ' + error.message });
         }
     });
 
@@ -265,7 +287,10 @@ io.on('connection', (socket) => {
                 console.log(`${player.name} left room: ${roomId}`);
 
                 // Notify other players
-                socket.to(roomId).emit('player_left', { player });
+                socket.to(roomId).emit('player_left', { 
+                    player,
+                    message: `${player.name} left the room`
+                });
 
                 // Clean up empty room
                 if (room.isEmpty()) {
@@ -370,9 +395,14 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on('disconnect', () => {
+    // Test connection
+    socket.on('test_connection', () => {
+        socket.emit('test_response', { message: 'Connection working!' });
+    });
+
+    socket.on('disconnect', (reason) => {
         try {
-            console.log(`User disconnected: ${socket.id}`);
+            console.log(`User disconnected: ${socket.id}, reason: ${reason}`);
 
             const roomId = socket.roomId;
             if (roomId) {
@@ -383,7 +413,10 @@ io.on('connection', (socket) => {
                         room.removePlayer(socket.id);
 
                         // Notify other players
-                        socket.to(roomId).emit('player_left', { player });
+                        socket.to(roomId).emit('player_left', { 
+                            player,
+                            message: `${player.name} left the room`
+                        });
 
                         // Clean up empty room
                         if (room.isEmpty()) {
