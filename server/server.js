@@ -14,11 +14,12 @@ const io = socketIo(server, {
         allowedHeaders: ["Content-Type"]
     },
     transports: ['websocket', 'polling'],
-    pingTimeout: 120000,
-    pingInterval: 30000,
+    pingTimeout: 300000, // 5 دقائق
+    pingInterval: 25000,  // ping كل 25 ثانية
     allowEIO3: true,
-    upgradeTimeout: 30000,
-    maxHttpBufferSize: 1e6
+    upgradeTimeout: 60000,
+    maxHttpBufferSize: 1e6,
+    connectTimeout: 45000
 });
 
 const PORT = process.env.PORT || 3000;
@@ -56,7 +57,8 @@ class GameRoom {
         this.gameBoard = ['', '', '', '', '', '', '', '', ''];
         this.currentPlayer = 'X';
         this.gameActive = true;
-        this.scores = { [host.id]: 0 };
+        this.scores = {};
+        this.scores[host.name] = 0; // استخدام الاسم بدلاً من ID
         this.chatMessages = [];
         this.createdAt = new Date();
         this.lastActivity = new Date();
@@ -66,9 +68,20 @@ class GameRoom {
     }
 
     addPlayer(player) {
+        // التحقق من وجود اللاعب بالاسم
+        const existingPlayer = this.players.find(p => p.name === player.name);
+        if (existingPlayer) {
+            // تحديث بيانات اللاعب الموجود
+            existingPlayer.id = player.id;
+            existingPlayer.socketId = player.socketId;
+            this.lastActivity = new Date();
+            console.log(`🔄 Updated existing player ${player.name} with new ID: ${player.id}`);
+            return true;
+        }
+
         if (this.players.length < 2) {
             this.players.push(player);
-            this.scores[player.id] = 0;
+            this.scores[player.name] = 0;
             this.lastActivity = new Date();
             console.log(`👥 Player ${player.name} (${player.id}) added to room ${this.roomId}. Total players: ${this.players.length}`);
             return true;
@@ -77,28 +90,59 @@ class GameRoom {
         return false;
     }
 
-    removePlayer(playerId) {
-        const playerIndex = this.players.findIndex(p => p.id === playerId);
+    removePlayerBySocketId(socketId) {
+        const playerIndex = this.players.findIndex(p => p.id === socketId);
         if (playerIndex !== -1) {
             const removedPlayer = this.players[playerIndex];
             this.players.splice(playerIndex, 1);
-            delete this.scores[playerId];
             this.lastActivity = new Date();
             
             console.log(`👋 Player ${removedPlayer.name} removed from room ${this.roomId}. Remaining: ${this.players.length}`);
             
-            if (this.host.id === playerId && this.players.length > 0) {
+            if (this.host.id === socketId && this.players.length > 0) {
                 this.host = this.players[0];
                 this.hostConnected = true;
                 console.log(`👑 New host assigned in room ${this.roomId}: ${this.host.name}`);
-            } else if (this.host.id === playerId) {
+            } else if (this.host.id === socketId) {
                 this.hostConnected = false;
             }
+            
+            return removedPlayer;
         }
+        return null;
+    }
+
+    // البحث عن اللاعب بالاسم أو ID
+    findPlayer(identifier) {
+        return this.players.find(p => p.id === identifier || p.name === identifier);
+    }
+
+    // تحديث بيانات اللاعب
+    updatePlayerSocket(playerName, newSocketId) {
+        const player = this.players.find(p => p.name === playerName);
+        if (player) {
+            player.id = newSocketId;
+            player.socketId = newSocketId;
+            
+            // تحديث المضيف إذا لزم الأمر
+            if (this.host.name === playerName) {
+                this.host = player;
+            }
+            
+            console.log(`🔄 Updated player ${playerName} socket ID to: ${newSocketId}`);
+            return true;
+        }
+        return false;
     }
 
     getOpponent(playerId) {
-        return this.players.find(p => p.id !== playerId);
+        const player = this.findPlayer(playerId);
+        if (!player) return null;
+        return this.players.find(p => p.name !== player.name);
+    }
+
+    getOpponentByName(playerName) {
+        return this.players.find(p => p.name !== playerName);
     }
 
     isFull() {
@@ -114,9 +158,9 @@ class GameRoom {
         const inactiveTime = now - this.lastActivity;
         const roomAge = now - this.createdAt;
         
-        return (this.isEmpty() && inactiveTime > 5 * 60 * 1000) ||
-               (inactiveTime > 60 * 60 * 1000) ||
-               (roomAge > 24 * 60 * 60 * 1000);
+        return (this.isEmpty() && inactiveTime > 15 * 60 * 1000) || // 15 دقيقة للغرف الفارغة
+               (inactiveTime > 4 * 60 * 60 * 1000) || // 4 ساعات بدون نشاط
+               (roomAge > 24 * 60 * 60 * 1000); // 24 ساعة عمر أقصى
     }
 
     updateActivity() {
@@ -133,7 +177,7 @@ class GameRoom {
 
     makeMove(index, playerId) {
         console.log(`\n🎮 MOVE ATTEMPT in room ${this.roomId}:`);
-        console.log(`   Player: ${playerId}`);
+        console.log(`   Player ID: ${playerId}`);
         console.log(`   Index: ${index}`);
         console.log(`   Current board: [${this.gameBoard.join(', ')}]`);
         console.log(`   Game active: ${this.gameActive}`);
@@ -144,14 +188,18 @@ class GameRoom {
             return { success: false, reason: 'Invalid move' };
         }
 
-        const player = this.players.find(p => p.id === playerId);
+        // البحث عن اللاعب بالـ ID أو الاسم
+        const player = this.findPlayer(playerId);
         if (!player) {
             console.log(`❌ Move rejected: player not found in room`);
+            console.log(`   Available players:`, this.players.map(p => `${p.name} (${p.id})`));
             return { success: false, reason: 'Player not found' };
         }
 
-        const symbol = player.id === this.host.id ? 'X' : 'O';
-        console.log(`   Player role: ${player.id === this.host.id ? 'HOST' : 'GUEST'}`);
+        const isHost = (player.name === this.host.name);
+        const symbol = isHost ? 'X' : 'O';
+        console.log(`   Player: ${player.name}`);
+        console.log(`   Player role: ${isHost ? 'HOST' : 'GUEST'}`);
         console.log(`   Symbol: ${symbol}`);
 
         this.gameBoard[index] = symbol;
@@ -163,9 +211,9 @@ class GameRoom {
         const winResult = this.checkWin();
         if (winResult.won) {
             this.gameActive = false;
-            this.scores[playerId]++;
+            this.scores[player.name]++;
             console.log(`🏆 GAME WON by ${player.name}! Winning cells: [${winResult.cells.join(', ')}]`);
-            return { success: true, gameEnd: 'win', winner: playerId, winningCells: winResult.cells };
+            return { success: true, gameEnd: 'win', winner: player.name, winningCells: winResult.cells };
         } else if (this.checkDraw()) {
             this.gameActive = false;
             console.log(`🤝 GAME DRAW!`);
@@ -174,7 +222,7 @@ class GameRoom {
 
         this.currentPlayer = this.currentPlayer === 'X' ? 'O' : 'X';
         console.log(`🔄 Next player: ${this.currentPlayer}`);
-        return { success: true, gameEnd: null };
+        return { success: true, gameEnd: null, symbol: symbol };
     }
 
     checkWin() {
@@ -225,16 +273,18 @@ function generateRoomId() {
 
 function cleanupEmptyRooms() {
     console.log('🧹 Running room cleanup...');
+    let cleanedCount = 0;
     for (let [roomId, room] of gameRooms) {
         if (room.shouldDelete()) {
             gameRooms.delete(roomId);
+            cleanedCount++;
             console.log(`🗑️ Cleaned up room: ${roomId}`);
         }
     }
-    console.log(`📊 Active rooms after cleanup: ${gameRooms.size}`);
+    console.log(`📊 Cleaned ${cleanedCount} rooms. Active rooms: ${gameRooms.size}`);
 }
 
-setInterval(cleanupEmptyRooms, 10 * 60 * 1000);
+setInterval(cleanupEmptyRooms, 15 * 60 * 1000); // كل 15 دقيقة
 
 // Socket connection handling
 io.on('connection', (socket) => {
@@ -269,9 +319,27 @@ io.on('connection', (socket) => {
             if (room) {
                 socket.join(roomId);
                 socket.roomId = roomId;
-                room.updateActivity();
-                console.log(`🔄 ${player.name} rejoined room: ${roomId}`);
                 
+                // تحديث أو إضافة اللاعب
+                const existingPlayer = room.players.find(p => p.name === player.name);
+                if (existingPlayer) {
+                    // تحديث بيانات اللاعب الموجود
+                    room.updatePlayerSocket(player.name, socket.id);
+                    console.log(`🔄 ${player.name} rejoined room: ${roomId} with new socket ID`);
+                } else {
+                    // إضافة لاعب جديد
+                    const playerWithId = {
+                        id: socket.id,
+                        ...player,
+                        socketId: socket.id
+                    };
+                    room.addPlayer(playerWithId);
+                    console.log(`👥 ${player.name} joined room: ${roomId} as new player`);
+                }
+                
+                room.updateActivity();
+                
+                // إرسال حالة اللعبة الحالية
                 socket.emit('game_state', {
                     gameState: {
                         board: room.gameBoard,
@@ -281,6 +349,23 @@ io.on('connection', (socket) => {
                     },
                     players: room.players
                 });
+
+                // إخبار اللاعبين الآخرين إذا كان هناك لاعب جديد
+                if (room.players.length === 2) {
+                    const opponent = room.getOpponentByName(player.name);
+                    if (opponent) {
+                        socket.to(roomId).emit('player_joined', {
+                            player: room.players.find(p => p.name === player.name),
+                            gameState: {
+                                board: room.gameBoard,
+                                currentPlayer: room.currentPlayer,
+                                scores: room.scores
+                            },
+                            message: `${player.name} joined the room!`
+                        });
+                    }
+                }
+                
             } else {
                 console.log(`❌ Rejoin failed: Room ${roomId} not found`);
                 socket.emit('room_error', { message: 'Room not found or expired' });
@@ -331,7 +416,7 @@ io.on('connection', (socket) => {
                 return;
             }
 
-            if (room.isFull()) {
+            if (room.isFull() && !room.players.find(p => p.name === player.name)) {
                 console.log(`❌ Room ${roomId} is full`);
                 socket.emit('room_full');
                 return;
@@ -343,32 +428,34 @@ io.on('connection', (socket) => {
                 socketId: socket.id
             };
 
-            room.addPlayer(playerWithId);
-            socket.join(roomId);
-            socket.roomId = roomId;
+            const added = room.addPlayer(playerWithId);
+            if (added) {
+                socket.join(roomId);
+                socket.roomId = roomId;
 
-            console.log(`🚪 ${player.name} joined room: ${roomId}`);
+                console.log(`🚪 ${player.name} joined room: ${roomId}`);
 
-            socket.emit('room_joined', {
-                roomId,
-                opponent: room.host,
-                gameState: {
-                    board: room.gameBoard,
-                    currentPlayer: room.currentPlayer,
-                    scores: room.scores
-                },
-                message: 'Successfully joined room!'
-            });
+                socket.emit('room_joined', {
+                    roomId,
+                    opponent: room.host,
+                    gameState: {
+                        board: room.gameBoard,
+                        currentPlayer: room.currentPlayer,
+                        scores: room.scores
+                    },
+                    message: 'Successfully joined room!'
+                });
 
-            socket.to(roomId).emit('player_joined', {
-                player: playerWithId,
-                gameState: {
-                    board: room.gameBoard,
-                    currentPlayer: room.currentPlayer,
-                    scores: room.scores
-                },
-                message: `${player.name} joined the room!`
-            });
+                socket.to(roomId).emit('player_joined', {
+                    player: playerWithId,
+                    gameState: {
+                        board: room.gameBoard,
+                        currentPlayer: room.currentPlayer,
+                        scores: room.scores
+                    },
+                    message: `${player.name} joined the room!`
+                });
+            }
 
         } catch (error) {
             console.error('❌ Error joining room:', error);
@@ -384,17 +471,16 @@ io.on('connection', (socket) => {
             const room = gameRooms.get(roomId);
             if (!room) return;
 
-            const player = room.players.find(p => p.id === socket.id);
-            if (player) {
-                room.removePlayer(socket.id);
+            const removedPlayer = room.removePlayerBySocketId(socket.id);
+            if (removedPlayer) {
                 socket.leave(roomId);
                 delete socket.roomId;
 
-                console.log(`👋 ${player.name} left room: ${roomId}`);
+                console.log(`👋 ${removedPlayer.name} left room: ${roomId}`);
 
                 socket.to(roomId).emit('player_left', { 
-                    player,
-                    message: `${player.name} left the room`
+                    player: removedPlayer,
+                    message: `${removedPlayer.name} left the room`
                 });
 
                 if (room.isEmpty()) {
@@ -425,17 +511,17 @@ io.on('connection', (socket) => {
             console.log(`📊 Room status:`);
             console.log(`   Players in room: ${room.players.length}`);
             room.players.forEach((p, i) => {
-                console.log(`     ${i + 1}. ${p.name} (${p.id}) ${p.id === room.host.id ? '[HOST]' : '[GUEST]'}`);
+                console.log(`     ${i + 1}. ${p.name} (${p.id}) ${p.name === room.host.name ? '[HOST]' : '[GUEST]'}`);
             });
 
             const moveResult = room.makeMove(index, socket.id);
-            console.log(`🎯 Move result: ${JSON.stringify(moveResult)}`);
+            console.log(`🎯 Move result:`, moveResult);
 
             if (moveResult.success) {
                 const moveData = {
                     index,
                     player: player,
-                    symbol: room.gameBoard[index],
+                    symbol: moveResult.symbol || room.gameBoard[index],
                     gameState: {
                         board: room.gameBoard,
                         currentPlayer: room.currentPlayer,
@@ -460,8 +546,8 @@ io.on('connection', (socket) => {
                 if (room.gameActive) {
                     const nextPlayer = room.getOpponent(socket.id);
                     if (nextPlayer) {
-                        console.log(`🔔 Sending turn notification to: ${nextPlayer.name} (${nextPlayer.socketId})`);
-                        io.to(nextPlayer.socketId).emit('turn_notification', {
+                        console.log(`🔔 Sending turn notification to: ${nextPlayer.name} (${nextPlayer.id})`);
+                        io.to(nextPlayer.id).emit('turn_notification', {
                             isYourTurn: true,
                             message: "It's your turn!"
                         });
@@ -541,22 +627,27 @@ io.on('connection', (socket) => {
                     if (player) {
                         console.log(`💔 ${player.name} disconnected from room: ${roomId}, reason: ${reason}`);
                         
-                        if (reason === 'transport close' || reason === 'client namespace disconnect') {
-                            console.log(`⏳ Temporary disconnect for ${player.name}, keeping in room for 30s`);
+                        // إعطاء وقت للإعادة الاتصال قبل حذف اللاعب
+                        if (reason === 'transport close' || reason === 'client namespace disconnect' || reason === 'ping timeout') {
+                            console.log(`⏳ Temporary disconnect for ${player.name}, keeping in room for 2 minutes`);
                             setTimeout(() => {
                                 const currentRoom = gameRooms.get(roomId);
-                                if (currentRoom && currentRoom.players.find(p => p.id === socket.id)) {
-                                    console.log(`⏰ ${player.name} did not reconnect, removing from room`);
-                                    currentRoom.removePlayer(socket.id);
-                                    
-                                    socket.to(roomId).emit('player_left', { 
-                                        player,
-                                        message: `${player.name} left the room`
-                                    });
+                                if (currentRoom) {
+                                    const stillExists = currentRoom.players.find(p => p.name === player.name && p.id === socket.id);
+                                    if (stillExists) {
+                                        console.log(`⏰ ${player.name} did not reconnect, removing from room`);
+                                        currentRoom.removePlayerBySocketId(socket.id);
+                                        
+                                        socket.to(roomId).emit('player_left', { 
+                                            player,
+                                            message: `${player.name} left the room`
+                                        });
+                                    }
                                 }
-                            }, 30000);
+                            }, 120000); // دقيقتان
                         } else {
-                            room.removePlayer(socket.id);
+                            // انقطاع مقصود - حذف فوري
+                            room.removePlayerBySocketId(socket.id);
                             
                             socket.to(roomId).emit('player_left', { 
                                 player,
@@ -594,6 +685,7 @@ app.get('/rooms', (req, res) => {
         active: room.gameActive,
         board: room.gameBoard,
         currentPlayer: room.currentPlayer,
+        scores: room.scores,
         created: room.createdAt,
         lastActivity: room.lastActivity,
         hostConnected: room.hostConnected
