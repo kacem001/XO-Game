@@ -5,7 +5,7 @@ let player2Data = { name: 'Player 2', avatar: null };
 let onlinePlayerData = { name: 'Player', avatar: null };
 
 // Initialize landing page
-document.addEventListener('DOMContentLoaded', function () {
+document.addEventListener('DOMContentLoaded', function() {
     console.log('Landing page loaded');
     initializeImageHandlers();
     loadSavedData();
@@ -88,7 +88,7 @@ function startGame() {
 }
 
 function createRoom() {
-    console.log('Creating room');
+    console.log('Creating online room...');
 
     const playerNameInput = document.getElementById('onlinePlayerName');
     const playerName = playerNameInput ? playerNameInput.value.trim() : '';
@@ -101,27 +101,19 @@ function createRoom() {
     onlinePlayerData.name = playerName;
     savePlayerData();
 
-    // Show loading state
-    showToast('Creating room...', 'info');
-
-    // For now, simulate room creation (you can enhance this with actual socket connection)
-    setTimeout(() => {
-        const roomId = generateRoomId();
-        localStorage.setItem('xo_game_mode', 'online');
-        localStorage.setItem('xo_room_id', roomId);
-        localStorage.setItem('xo_is_host', 'true');
-        localStorage.setItem('xo_current_player', JSON.stringify(onlinePlayerData));
-
-        showToast(`Room ${roomId} created!`, 'success');
-
-        setTimeout(() => {
-            window.location.href = 'game.html';
-        }, 1000);
-    }, 1000);
+    // التأكد من تحميل Socket.io
+    if (!window.io) {
+        showToast('Loading connection...', 'info');
+        loadSocketIO(() => {
+            initializeAndCreateRoom();
+        });
+    } else {
+        initializeAndCreateRoom();
+    }
 }
 
 function joinRoom() {
-    console.log('Joining room');
+    console.log('Joining online room...');
 
     const playerNameInput = document.getElementById('onlinePlayerName');
     const roomCodeInput = document.getElementById('roomCode');
@@ -142,29 +134,69 @@ function joinRoom() {
     onlinePlayerData.name = playerName;
     savePlayerData();
 
-    // Show loading state
-    showToast('Joining room...', 'info');
+    // التأكد من تحميل Socket.io
+    if (!window.io) {
+        showToast('Loading connection...', 'info');
+        loadSocketIO(() => {
+            initializeAndJoinRoom(roomCode);
+        });
+    } else {
+        initializeAndJoinRoom(roomCode);
+    }
+}
 
-    // For now, simulate joining (you can enhance this with actual socket connection)
-    setTimeout(() => {
-        localStorage.setItem('xo_game_mode', 'online');
-        localStorage.setItem('xo_room_id', roomCode);
-        localStorage.setItem('xo_is_host', 'false');
-        localStorage.setItem('xo_current_player', JSON.stringify(onlinePlayerData));
+function loadSocketIO(callback) {
+    const script = document.createElement('script');
+    script.src = 'https://cdn.socket.io/4.7.4/socket.io.min.js';
+    script.onload = () => {
+        // تحميل socket.js بعد تحميل Socket.io
+        const socketScript = document.createElement('script');
+        socketScript.src = 'js/socket.js';
+        socketScript.onload = callback;
+        document.head.appendChild(socketScript);
+    };
+    document.head.appendChild(script);
+}
 
-        showToast(`Joined room ${roomCode}!`, 'success');
-
+function initializeAndCreateRoom() {
+    showToast('Connecting to server...', 'info');
+    
+    if (window.socketAPI) {
+        window.socketAPI.initializeSocket();
+        
+        // انتظار قليل للاتصال ثم إنشاء الغرفة
         setTimeout(() => {
-            window.location.href = 'game.html';
-        }, 1000);
-    }, 1000);
+            if (window.socketAPI.isConnected()) {
+                window.socketAPI.createOnlineRoom();
+            } else {
+                showToast('Failed to connect to server', 'error');
+            }
+        }, 2000);
+    }
+}
+
+function initializeAndJoinRoom(roomCode) {
+    showToast('Connecting to server...', 'info');
+    
+    if (window.socketAPI) {
+        window.socketAPI.initializeSocket();
+        
+        // انتظار قليل للاتصال ثم الانضمام للغرفة
+        setTimeout(() => {
+            if (window.socketAPI.isConnected()) {
+                window.socketAPI.joinOnlineRoom(roomCode);
+            } else {
+                showToast('Failed to connect to server', 'error');
+            }
+        }, 2000);
+    }
 }
 
 function initializeImageHandlers() {
     // Player 1 image handler
     const player1ImageInput = document.getElementById('player1Image');
     if (player1ImageInput) {
-        player1ImageInput.addEventListener('change', function (e) {
+        player1ImageInput.addEventListener('change', function(e) {
             handleImageUpload(e, 'player1Avatar', (dataUrl) => {
                 player1Data.avatar = dataUrl;
                 savePlayerData();
@@ -175,7 +207,7 @@ function initializeImageHandlers() {
     // Player 2 image handler
     const player2ImageInput = document.getElementById('player2Image');
     if (player2ImageInput) {
-        player2ImageInput.addEventListener('change', function (e) {
+        player2ImageInput.addEventListener('change', function(e) {
             handleImageUpload(e, 'player2Avatar', (dataUrl) => {
                 player2Data.avatar = dataUrl;
                 savePlayerData();
@@ -186,7 +218,7 @@ function initializeImageHandlers() {
     // Online player image handler
     const onlinePlayerImageInput = document.getElementById('onlinePlayerImage');
     if (onlinePlayerImageInput) {
-        onlinePlayerImageInput.addEventListener('change', function (e) {
+        onlinePlayerImageInput.addEventListener('change', function(e) {
             handleImageUpload(e, 'onlinePlayerAvatar', (dataUrl) => {
                 onlinePlayerData.avatar = dataUrl;
                 savePlayerData();
@@ -197,7 +229,7 @@ function initializeImageHandlers() {
     // Name input handlers
     const player1NameInput = document.getElementById('player1Name');
     if (player1NameInput) {
-        player1NameInput.addEventListener('input', function (e) {
+        player1NameInput.addEventListener('input', function(e) {
             player1Data.name = e.target.value || 'Player 1';
             savePlayerData();
         });
@@ -205,7 +237,7 @@ function initializeImageHandlers() {
 
     const player2NameInput = document.getElementById('player2Name');
     if (player2NameInput) {
-        player2NameInput.addEventListener('input', function (e) {
+        player2NameInput.addEventListener('input', function(e) {
             player2Data.name = e.target.value || 'Player 2';
             savePlayerData();
         });
@@ -213,7 +245,7 @@ function initializeImageHandlers() {
 
     const onlinePlayerNameInput = document.getElementById('onlinePlayerName');
     if (onlinePlayerNameInput) {
-        onlinePlayerNameInput.addEventListener('input', function (e) {
+        onlinePlayerNameInput.addEventListener('input', function(e) {
             onlinePlayerData.name = e.target.value || 'Player';
             savePlayerData();
         });
@@ -236,7 +268,7 @@ function handleImageUpload(event, avatarElementId, callback) {
         }
 
         const reader = new FileReader();
-        reader.onload = function (e) {
+        reader.onload = function(e) {
             const dataUrl = e.target.result;
             const avatarElement = document.getElementById(avatarElementId);
 
@@ -413,16 +445,16 @@ function applyTheme() {
 }
 
 // Room code input formatting
-document.addEventListener('DOMContentLoaded', function () {
+document.addEventListener('DOMContentLoaded', function() {
     const roomCodeInput = document.getElementById('roomCode');
     if (roomCodeInput) {
-        roomCodeInput.addEventListener('input', function (e) {
+        roomCodeInput.addEventListener('input', function(e) {
             let value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
             if (value.length > 6) value = value.substring(0, 6);
             e.target.value = value;
         });
 
-        roomCodeInput.addEventListener('keypress', function (e) {
+        roomCodeInput.addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
                 joinRoom();
             }
