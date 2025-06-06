@@ -1,218 +1,218 @@
-// Socket connection and online game functionality
+// Socket connection
 let socket = null;
 let isOnline = false;
 let currentRoom = null;
 let isRoomHost = false;
 let onlineOpponent = null;
-let reconnectAttempts = 0;
-const maxReconnectAttempts = 5;
 
-// Initialize socket connection
+// عنوان الخادم الحقيقي
+const getServerUrl = () => {
+    // ضع هنا رابط الخادم من Render بعد النشر
+    if (window.location.hostname === 'localhost') {
+        return 'http://localhost:3000';
+    }
+    return 'https://xo-game-server-rtty.onrender.com'; // سنغيره بعد النشر
+};
+
 function initializeSocket() {
-    // Use the deployed server URL or localhost for development
-    const serverUrl = window.location.hostname === 'https://xo-game-server-rtty.onrender.com'
-        ? 'http://localhost:3000'
-        : window.location.origin;
-
-    socket = io(serverUrl, {
-        transports: ['websocket', 'polling'],
-        timeout: 20000,
-        forceNew: true
-    });
-
-    setupSocketListeners();
+    const serverUrl = getServerUrl();
+    
+    try {
+        socket = io(serverUrl, {
+            transports: ['websocket', 'polling'],
+            timeout: 20000,
+            forceNew: true
+        });
+        
+        setupSocketListeners();
+        
+    } catch (error) {
+        console.error('Failed to connect to server:', error);
+        showToast('Failed to connect to server', 'error');
+    }
 }
 
 function setupSocketListeners() {
     socket.on('connect', () => {
         console.log('Connected to server');
-        reconnectAttempts = 0;
         showToast('Connected to server', 'success');
+        isOnline = true;
     });
-
+    
     socket.on('disconnect', () => {
         console.log('Disconnected from server');
         showToast('Disconnected from server', 'error');
-        handleDisconnection();
+        isOnline = false;
     });
-
+    
     socket.on('connect_error', (error) => {
         console.error('Connection error:', error);
-        handleConnectionError();
+        showToast('Cannot connect to server', 'error');
     });
-
+    
     // Room events
     socket.on('room_created', (data) => {
         currentRoom = data.roomId;
         isRoomHost = true;
-        showToast(`Room ${data.roomId} created!`, 'success');
-
-        // Navigate to game page with room info
+        console.log('Room created:', data.roomId);
+        
+        // حفظ بيانات الغرفة
         localStorage.setItem('xo_game_mode', 'online');
         localStorage.setItem('xo_room_id', data.roomId);
         localStorage.setItem('xo_is_host', 'true');
-        localStorage.setItem('xo_current_player', JSON.stringify(onlinePlayerData));
-
-        window.location.href = 'game.html';
+        localStorage.setItem('xo_current_player', JSON.stringify(getCurrentPlayerData()));
+        
+        showToast(`Room ${data.roomId} created!`, 'success');
+        
+        // الانتقال للعبة
+        setTimeout(() => {
+            window.location.href = 'game.html';
+        }, 1500);
     });
-
+    
     socket.on('room_joined', (data) => {
         currentRoom = data.roomId;
         isRoomHost = false;
         onlineOpponent = data.opponent;
-        showToast(`Joined room ${data.roomId}!`, 'success');
-
-        // Navigate to game page
+        
+        console.log('Joined room:', data.roomId);
+        
+        // حفظ بيانات الغرفة
         localStorage.setItem('xo_game_mode', 'online');
         localStorage.setItem('xo_room_id', data.roomId);
         localStorage.setItem('xo_is_host', 'false');
-        localStorage.setItem('xo_current_player', JSON.stringify(onlinePlayerData));
+        localStorage.setItem('xo_current_player', JSON.stringify(getCurrentPlayerData()));
         localStorage.setItem('xo_opponent', JSON.stringify(data.opponent));
-
-        window.location.href = 'game.html';
+        
+        showToast(`Joined room ${data.roomId}!`, 'success');
+        
+        // الانتقال للعبة
+        setTimeout(() => {
+            window.location.href = 'game.html';
+        }, 1500);
     });
-
+    
     socket.on('room_error', (data) => {
-        showToast(data.message, 'error');
         console.error('Room error:', data.message);
+        showToast(data.message, 'error');
     });
-
+    
+    socket.on('room_full', () => {
+        showToast('Room is full! Only 2 players allowed.', 'error');
+    });
+    
     socket.on('player_joined', (data) => {
+        console.log('Player joined:', data.player.name);
         onlineOpponent = data.player;
         showToast(`${data.player.name} joined the room!`, 'success');
-
-        // Hide waiting overlay and start game
+        
+        // إخفاء شاشة الانتظار إذا كنا في اللعبة
         if (typeof hideWaitingOverlay === 'function') {
             hideWaitingOverlay();
         }
-
-        // Update opponent info in game
-        if (typeof updateOpponentInfo === 'function') {
-            updateOpponentInfo(data.player);
-        }
-
-        // Store opponent data
+        
         localStorage.setItem('xo_opponent', JSON.stringify(data.player));
     });
-
+    
     socket.on('player_left', (data) => {
+        console.log('Player left:', data.player.name);
         showToast(`${data.player.name} left the room`, 'warning');
         onlineOpponent = null;
-
-        // Show waiting overlay if in game
-        if (typeof showWaitingOverlay === 'function') {
-            showWaitingOverlay();
-        }
-
-        // Reset game if in progress
-        if (typeof resetGameForDisconnection === 'function') {
-            resetGameForDisconnection();
-        }
+        localStorage.removeItem('xo_opponent');
     });
-
+    
     // Game events
     socket.on('game_move', (data) => {
         if (typeof handleOnlineMove === 'function') {
-            handleOnlineMove(data.index, data.player);
+            handleOnlineMove(data);
         }
     });
-
-    socket.on('game_state', (data) => {
-        if (typeof updateGameState === 'function') {
-            updateGameState(data);
-        }
-    });
-
-    socket.on('game_restart', (data) => {
+    
+    socket.on('game_restart', () => {
         if (typeof handleOnlineRestart === 'function') {
             handleOnlineRestart();
         }
-        showToast('Game restarted by opponent', 'info');
     });
-
-    socket.on('turn_notification', (data) => {
-        if (data.isYourTurn) {
-            showToast("It's your turn!", 'info');
-            if (typeof showTurnNotification === 'function') {
-                showTurnNotification();
-            }
-        }
-    });
-
-    // Chat events
+    
     socket.on('chat_message', (data) => {
         if (typeof addChatMessage === 'function') {
             addChatMessage(data.message, data.sender, false);
         }
     });
-
-    socket.on('room_full', () => {
-        showToast('Room is full! Only 2 players allowed.', 'error');
+    
+    socket.on('turn_notification', (data) => {
+        if (data.isYourTurn) {
+            showToast("It's your turn!", 'info');
+            if ('Notification' in window && Notification.permission === 'granted') {
+                new Notification('XO Game', {
+                    body: "It's your turn!",
+                    icon: '/favicon.ico'
+                });
+            }
+        }
     });
 }
 
-function handleConnectionError() {
-    if (reconnectAttempts < maxReconnectAttempts) {
-        reconnectAttempts++;
-        showToast(`Reconnecting... (${reconnectAttempts}/${maxReconnectAttempts})`, 'warning');
-
-        setTimeout(() => {
-            if (socket) {
-                socket.connect();
-            }
-        }, 2000 * reconnectAttempts);
-    } else {
-        showToast('Failed to connect to server. Please refresh the page.', 'error');
-    }
-}
-
-function handleDisconnection() {
-    isOnline = false;
-    if (currentRoom && typeof showWaitingOverlay === 'function') {
-        showWaitingOverlay();
-    }
-}
-
-// Online game functions
+// دوال إرسال البيانات للخادم
 function createOnlineRoom() {
     if (!socket || !socket.connected) {
-        showToast('Not connected to server', 'error');
+        showToast('Not connected to server. Please wait...', 'error');
         return;
     }
-
-    const playerName = document.getElementById('onlinePlayerName').value.trim();
-    if (!playerName) {
+    
+    const playerData = getCurrentPlayerData();
+    if (!playerData.name.trim()) {
         showToast('Please enter your name', 'error');
         return;
     }
-
-    onlinePlayerData.name = playerName;
-    savePlayerData();
-
-    socket.emit('create_room', onlinePlayerData);
+    
+    console.log('Creating room with player:', playerData);
+    socket.emit('create_room', playerData);
 }
 
 function joinOnlineRoom(roomId) {
     if (!socket || !socket.connected) {
-        showToast('Not connected to server', 'error');
+        showToast('Not connected to server. Please wait...', 'error');
         return;
     }
-
-    const playerName = document.getElementById('onlinePlayerName').value.trim();
-    if (!playerName) {
+    
+    const playerData = getCurrentPlayerData();
+    if (!playerData.name.trim()) {
         showToast('Please enter your name', 'error');
         return;
     }
-
+    
     if (!roomId || roomId.length !== 6) {
-        showToast('Please enter a valid room code', 'error');
+        showToast('Please enter a valid 6-character room code', 'error');
         return;
     }
+    
+    console.log('Joining room:', roomId, 'with player:', playerData);
+    socket.emit('join_room', { 
+        roomId: roomId.toUpperCase(), 
+        player: playerData 
+    });
+}
 
-    onlinePlayerData.name = playerName;
-    savePlayerData();
-
-    socket.emit('join_room', { roomId: roomId.toUpperCase(), player: onlinePlayerData });
+function getCurrentPlayerData() {
+    const nameInput = document.getElementById('onlinePlayerName');
+    const savedData = localStorage.getItem('xo_online_player_data');
+    
+    let playerData = { name: 'Player', avatar: null };
+    
+    if (savedData) {
+        try {
+            playerData = JSON.parse(savedData);
+        } catch (e) {
+            console.error('Error parsing saved player data:', e);
+        }
+    }
+    
+    if (nameInput && nameInput.value.trim()) {
+        playerData.name = nameInput.value.trim();
+    }
+    
+    return playerData;
 }
 
 function sendGameMove(index) {
@@ -220,16 +220,7 @@ function sendGameMove(index) {
         socket.emit('game_move', {
             roomId: currentRoom,
             index: index,
-            player: onlinePlayerData
-        });
-    }
-}
-
-function sendGameRestart() {
-    if (socket && socket.connected && currentRoom) {
-        socket.emit('game_restart', {
-            roomId: currentRoom,
-            player: onlinePlayerData
+            player: getCurrentPlayerData()
         });
     }
 }
@@ -239,7 +230,7 @@ function sendChatMessage(message) {
         socket.emit('chat_message', {
             roomId: currentRoom,
             message: message.trim(),
-            sender: onlinePlayerData.name
+            sender: getCurrentPlayerData().name
         });
         return true;
     }
@@ -250,10 +241,10 @@ function leaveRoom() {
     if (socket && socket.connected && currentRoom) {
         socket.emit('leave_room', {
             roomId: currentRoom,
-            player: onlinePlayerData
+            player: getCurrentPlayerData()
         });
     }
-
+    
     currentRoom = null;
     isRoomHost = false;
     onlineOpponent = null;
@@ -262,64 +253,62 @@ function leaveRoom() {
     localStorage.removeItem('xo_opponent');
 }
 
-// Utility functions
-function generateRoomId() {
-    return Math.random().toString(36).substring(2, 8).toUpperCase();
-}
-
 function showToast(message, type = 'info') {
-    // Remove existing toast
+    console.log('Toast:', message, type);
+    
     const existingToast = document.querySelector('.toast');
     if (existingToast) {
         existingToast.remove();
     }
-
-    // Create new toast
+    
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
     toast.textContent = message;
+    
+    const colors = {
+        info: '#667eea',
+        success: '#27ae60',
+        error: '#e74c3c',
+        warning: '#f39c12'
+    };
+    
+    toast.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: ${colors[type] || colors.info};
+        color: white;
+        padding: 15px 25px;
+        border-radius: 10px;
+        box-shadow: 0 5px 20px rgba(0, 0, 0, 0.3);
+        transform: translateX(100%);
+        transition: transform 0.3s ease;
+        z-index: 3000;
+        max-width: 300px;
+        font-family: 'Poppins', sans-serif;
+        font-weight: 500;
+    `;
+    
     document.body.appendChild(toast);
-
-    // Show toast
-    setTimeout(() => toast.classList.add('active'), 100);
-
-    // Hide toast after 3 seconds
+    
     setTimeout(() => {
-        toast.classList.remove('active');
+        toast.style.transform = 'translateX(0)';
+    }, 100);
+    
+    setTimeout(() => {
+        toast.style.transform = 'translateX(100%)';
         setTimeout(() => toast.remove(), 300);
     }, 3000);
 }
 
-// Initialize socket when online features are needed
-function initializeOnlineFeatures() {
-    if (!socket) {
-        initializeSocket();
-    }
-    isOnline = true;
-}
-
-// Cleanup socket connection
-function cleanupSocket() {
-    if (socket) {
-        socket.disconnect();
-        socket = null;
-    }
-    isOnline = false;
-    currentRoom = null;
-    isRoomHost = false;
-    onlineOpponent = null;
-}
-
-// Export functions for use in other files
+// تصدير الدوال للاستخدام في ملفات أخرى
 window.socketAPI = {
-    initializeOnlineFeatures,
+    initializeSocket,
     createOnlineRoom,
     joinOnlineRoom,
     sendGameMove,
-    sendGameRestart,
     sendChatMessage,
     leaveRoom,
-    cleanupSocket,
     isConnected: () => socket && socket.connected,
     getCurrentRoom: () => currentRoom,
     isHost: () => isRoomHost,
