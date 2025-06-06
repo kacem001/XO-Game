@@ -14,8 +14,8 @@ const io = socketIo(server, {
         allowedHeaders: ["Content-Type"]
     },
     transports: ['websocket', 'polling'],
-    pingTimeout: 120000, // زيادة timeout إلى دقيقتين
-    pingInterval: 30000,  // ping كل 30 ثانية
+    pingTimeout: 120000,
+    pingInterval: 30000,
     allowEIO3: true,
     upgradeTimeout: 30000,
     maxHttpBufferSize: 1e6
@@ -59,31 +59,41 @@ class GameRoom {
         this.scores = { [host.id]: 0 };
         this.chatMessages = [];
         this.createdAt = new Date();
-        this.lastActivity = new Date(); // إضافة تتبع آخر نشاط
-        this.hostConnected = true; // إضافة تتبع اتصال المضيف
+        this.lastActivity = new Date();
+        this.hostConnected = true;
+        
+        console.log(`🏠 Room ${roomId} created with host: ${host.name} (${host.id})`);
     }
 
     addPlayer(player) {
         if (this.players.length < 2) {
             this.players.push(player);
             this.scores[player.id] = 0;
-            this.lastActivity = new Date(); // تحديث النشاط
+            this.lastActivity = new Date();
+            console.log(`👥 Player ${player.name} (${player.id}) added to room ${this.roomId}. Total players: ${this.players.length}`);
             return true;
         }
+        console.log(`❌ Room ${this.roomId} is full, cannot add player ${player.name}`);
         return false;
     }
 
     removePlayer(playerId) {
-        this.players = this.players.filter(p => p.id !== playerId);
-        delete this.scores[playerId];
-        this.lastActivity = new Date();
-        
-        // إذا كان المضيف يغادر، تحديد العضو الآخر كمضيف جديد
-        if (this.host.id === playerId && this.players.length > 0) {
-            this.host = this.players[0];
-            this.hostConnected = true;
-        } else if (this.host.id === playerId) {
-            this.hostConnected = false;
+        const playerIndex = this.players.findIndex(p => p.id === playerId);
+        if (playerIndex !== -1) {
+            const removedPlayer = this.players[playerIndex];
+            this.players.splice(playerIndex, 1);
+            delete this.scores[playerId];
+            this.lastActivity = new Date();
+            
+            console.log(`👋 Player ${removedPlayer.name} removed from room ${this.roomId}. Remaining: ${this.players.length}`);
+            
+            if (this.host.id === playerId && this.players.length > 0) {
+                this.host = this.players[0];
+                this.hostConnected = true;
+                console.log(`👑 New host assigned in room ${this.roomId}: ${this.host.name}`);
+            } else if (this.host.id === playerId) {
+                this.hostConnected = false;
+            }
         }
     }
 
@@ -99,16 +109,11 @@ class GameRoom {
         return this.players.length === 0;
     }
 
-    // تحقق إذا كان يجب حذف الغرفة
     shouldDelete() {
         const now = new Date();
         const inactiveTime = now - this.lastActivity;
         const roomAge = now - this.createdAt;
         
-        // حذف الغرفة إذا:
-        // 1. فارغة لأكثر من 5 دقائق
-        // 2. غير نشطة لأكثر من ساعة
-        // 3. عمر الغرفة أكثر من 24 ساعة
         return (this.isEmpty() && inactiveTime > 5 * 60 * 1000) ||
                (inactiveTime > 60 * 60 * 1000) ||
                (roomAge > 24 * 60 * 60 * 1000);
@@ -123,31 +128,53 @@ class GameRoom {
         this.currentPlayer = 'X';
         this.gameActive = true;
         this.updateActivity();
+        console.log(`🔄 Game reset in room ${this.roomId}`);
     }
 
     makeMove(index, playerId) {
-        if (this.gameBoard[index] === '' && this.gameActive) {
-            const player = this.players.find(p => p.id === playerId);
-            const symbol = player.id === this.host.id ? 'X' : 'O';
-
-            this.gameBoard[index] = symbol;
-            this.updateActivity(); // تحديث النشاط
-
-            // Check for win or draw
-            const winResult = this.checkWin();
-            if (winResult.won) {
-                this.gameActive = false;
-                this.scores[playerId]++;
-                return { success: true, gameEnd: 'win', winner: playerId, winningCells: winResult.cells };
-            } else if (this.checkDraw()) {
-                this.gameActive = false;
-                return { success: true, gameEnd: 'draw' };
-            }
-
-            this.currentPlayer = this.currentPlayer === 'X' ? 'O' : 'X';
-            return { success: true, gameEnd: null };
+        console.log(`\n🎮 MOVE ATTEMPT in room ${this.roomId}:`);
+        console.log(`   Player: ${playerId}`);
+        console.log(`   Index: ${index}`);
+        console.log(`   Current board: [${this.gameBoard.join(', ')}]`);
+        console.log(`   Game active: ${this.gameActive}`);
+        console.log(`   Cell empty: ${this.gameBoard[index] === ''}`);
+        
+        if (this.gameBoard[index] !== '' || !this.gameActive) {
+            console.log(`❌ Move rejected: cell occupied or game inactive`);
+            return { success: false, reason: 'Invalid move' };
         }
-        return { success: false };
+
+        const player = this.players.find(p => p.id === playerId);
+        if (!player) {
+            console.log(`❌ Move rejected: player not found in room`);
+            return { success: false, reason: 'Player not found' };
+        }
+
+        const symbol = player.id === this.host.id ? 'X' : 'O';
+        console.log(`   Player role: ${player.id === this.host.id ? 'HOST' : 'GUEST'}`);
+        console.log(`   Symbol: ${symbol}`);
+
+        this.gameBoard[index] = symbol;
+        this.updateActivity();
+
+        console.log(`✅ Move successful! New board: [${this.gameBoard.join(', ')}]`);
+
+        // Check for win or draw
+        const winResult = this.checkWin();
+        if (winResult.won) {
+            this.gameActive = false;
+            this.scores[playerId]++;
+            console.log(`🏆 GAME WON by ${player.name}! Winning cells: [${winResult.cells.join(', ')}]`);
+            return { success: true, gameEnd: 'win', winner: playerId, winningCells: winResult.cells };
+        } else if (this.checkDraw()) {
+            this.gameActive = false;
+            console.log(`🤝 GAME DRAW!`);
+            return { success: true, gameEnd: 'draw' };
+        }
+
+        this.currentPlayer = this.currentPlayer === 'X' ? 'O' : 'X';
+        console.log(`🔄 Next player: ${this.currentPlayer}`);
+        return { success: true, gameEnd: null };
     }
 
     checkWin() {
@@ -183,7 +210,6 @@ class GameRoom {
         this.chatMessages.push(chatMessage);
         this.updateActivity();
 
-        // Keep only last 50 messages
         if (this.chatMessages.length > 50) {
             this.chatMessages = this.chatMessages.slice(-50);
         }
@@ -198,33 +224,26 @@ function generateRoomId() {
 }
 
 function cleanupEmptyRooms() {
-    console.log('Running room cleanup...');
+    console.log('🧹 Running room cleanup...');
     for (let [roomId, room] of gameRooms) {
         if (room.shouldDelete()) {
             gameRooms.delete(roomId);
-            console.log(`Cleaned up room: ${roomId} (reason: ${room.isEmpty() ? 'empty' : 'inactive'})`);
+            console.log(`🗑️ Cleaned up room: ${roomId}`);
         }
     }
-    console.log(`Active rooms after cleanup: ${gameRooms.size}`);
+    console.log(`📊 Active rooms after cleanup: ${gameRooms.size}`);
 }
 
-// Clean up empty rooms every 10 minutes (بدلاً من كل ساعة)
 setInterval(cleanupEmptyRooms, 10 * 60 * 1000);
 
 // Socket connection handling
 io.on('connection', (socket) => {
-    console.log(`User connected: ${socket.id}`);
-
-    // Store socket reference
+    console.log(`🔌 User connected: ${socket.id}`);
     playerSockets.set(socket.id, socket);
-    
-    // Send connection confirmation
     socket.emit('connected', { message: 'Connected successfully!' });
 
-    // Keep alive handlers
     socket.on('ping', () => {
         socket.emit('pong');
-        // تحديث نشاط الغرفة إذا كان اللاعب في غرفة
         if (socket.roomId) {
             const room = gameRooms.get(socket.roomId);
             if (room) {
@@ -234,7 +253,7 @@ io.on('connection', (socket) => {
     });
 
     socket.on('room_created_confirm', (data) => {
-        console.log(`Room creation confirmed for: ${data.roomId}`);
+        console.log(`✅ Room creation confirmed for: ${data.roomId}`);
         const room = gameRooms.get(data.roomId);
         if (room) {
             room.updateActivity();
@@ -251,9 +270,8 @@ io.on('connection', (socket) => {
                 socket.join(roomId);
                 socket.roomId = roomId;
                 room.updateActivity();
-                console.log(`${player.name} rejoined room: ${roomId}`);
+                console.log(`🔄 ${player.name} rejoined room: ${roomId}`);
                 
-                // إرسال حالة اللعبة الحالية
                 socket.emit('game_state', {
                     gameState: {
                         board: room.gameBoard,
@@ -264,10 +282,11 @@ io.on('connection', (socket) => {
                     players: room.players
                 });
             } else {
+                console.log(`❌ Rejoin failed: Room ${roomId} not found`);
                 socket.emit('room_error', { message: 'Room not found or expired' });
             }
         } catch (error) {
-            console.error('Error rejoining room:', error);
+            console.error('❌ Error rejoining room:', error);
             socket.emit('room_error', { message: 'Failed to rejoin room' });
         }
     });
@@ -287,7 +306,7 @@ io.on('connection', (socket) => {
             socket.join(roomId);
             socket.roomId = roomId;
 
-            console.log(`Room created: ${roomId} by ${host.name}`);
+            console.log(`🏠 Room created: ${roomId} by ${host.name}`);
 
             socket.emit('room_created', {
                 roomId,
@@ -296,7 +315,7 @@ io.on('connection', (socket) => {
             });
 
         } catch (error) {
-            console.error('Error creating room:', error);
+            console.error('❌ Error creating room:', error);
             socket.emit('room_error', { message: 'Failed to create room: ' + error.message });
         }
     });
@@ -307,13 +326,13 @@ io.on('connection', (socket) => {
             const room = gameRooms.get(roomId);
 
             if (!room) {
-                console.log(`Room ${roomId} not found`);
+                console.log(`❌ Room ${roomId} not found`);
                 socket.emit('room_error', { message: 'Room not found' });
                 return;
             }
 
             if (room.isFull()) {
-                console.log(`Room ${roomId} is full`);
+                console.log(`❌ Room ${roomId} is full`);
                 socket.emit('room_full');
                 return;
             }
@@ -328,9 +347,8 @@ io.on('connection', (socket) => {
             socket.join(roomId);
             socket.roomId = roomId;
 
-            console.log(`${player.name} joined room: ${roomId}`);
+            console.log(`🚪 ${player.name} joined room: ${roomId}`);
 
-            // Notify the player that joined
             socket.emit('room_joined', {
                 roomId,
                 opponent: room.host,
@@ -342,7 +360,6 @@ io.on('connection', (socket) => {
                 message: 'Successfully joined room!'
             });
 
-            // Notify the host that someone joined
             socket.to(roomId).emit('player_joined', {
                 player: playerWithId,
                 gameState: {
@@ -354,7 +371,7 @@ io.on('connection', (socket) => {
             });
 
         } catch (error) {
-            console.error('Error joining room:', error);
+            console.error('❌ Error joining room:', error);
             socket.emit('room_error', { message: 'Failed to join room: ' + error.message });
         }
     });
@@ -373,39 +390,49 @@ io.on('connection', (socket) => {
                 socket.leave(roomId);
                 delete socket.roomId;
 
-                console.log(`${player.name} left room: ${roomId}`);
+                console.log(`👋 ${player.name} left room: ${roomId}`);
 
-                // Notify other players
                 socket.to(roomId).emit('player_left', { 
                     player,
                     message: `${player.name} left the room`
                 });
 
-                // لا تحذف الغرفة فوراً، دع cleanup يتعامل معها
                 if (room.isEmpty()) {
-                    console.log(`Room ${roomId} is now empty, will be cleaned up later`);
+                    console.log(`📭 Room ${roomId} is now empty`);
                 }
             }
         } catch (error) {
-            console.error('Error leaving room:', error);
+            console.error('❌ Error leaving room:', error);
         }
     });
 
     socket.on('game_move', (data) => {
         try {
             const { roomId, index, player } = data;
+            console.log(`\n📨 GAME MOVE EVENT RECEIVED:`);
+            console.log(`   Room ID: ${roomId}`);
+            console.log(`   Player: ${player.name} (${socket.id})`);
+            console.log(`   Move Index: ${index}`);
+            
             const room = gameRooms.get(roomId);
 
             if (!room) {
+                console.log(`❌ Room ${roomId} not found`);
                 socket.emit('room_error', { message: 'Room not found' });
                 return;
             }
 
+            console.log(`📊 Room status:`);
+            console.log(`   Players in room: ${room.players.length}`);
+            room.players.forEach((p, i) => {
+                console.log(`     ${i + 1}. ${p.name} (${p.id}) ${p.id === room.host.id ? '[HOST]' : '[GUEST]'}`);
+            });
+
             const moveResult = room.makeMove(index, socket.id);
+            console.log(`🎯 Move result: ${JSON.stringify(moveResult)}`);
 
             if (moveResult.success) {
-                // Broadcast move to all players in room
-                io.to(roomId).emit('game_move', {
+                const moveData = {
                     index,
                     player: player,
                     symbol: room.gameBoard[index],
@@ -418,21 +445,38 @@ io.on('connection', (socket) => {
                     gameEnd: moveResult.gameEnd,
                     winner: moveResult.winner,
                     winningCells: moveResult.winningCells
-                });
+                };
+
+                console.log(`📡 Broadcasting move to room ${roomId}:`);
+                console.log(`   Symbol placed: ${moveData.symbol}`);
+                console.log(`   Game active: ${moveData.gameState.active}`);
+                console.log(`   Game end: ${moveData.gameEnd || 'continuing'}`);
+
+                // Broadcast to ALL players in room
+                io.to(roomId).emit('game_move', moveData);
+                console.log(`✅ Move broadcasted to room ${roomId}`);
 
                 // Send turn notification to next player
                 if (room.gameActive) {
                     const nextPlayer = room.getOpponent(socket.id);
                     if (nextPlayer) {
+                        console.log(`🔔 Sending turn notification to: ${nextPlayer.name} (${nextPlayer.socketId})`);
                         io.to(nextPlayer.socketId).emit('turn_notification', {
                             isYourTurn: true,
                             message: "It's your turn!"
                         });
+                    } else {
+                        console.log(`⚠️ No opponent found for turn notification`);
                     }
                 }
+            } else {
+                console.log(`❌ Move failed: ${moveResult.reason}`);
+                socket.emit('move_error', { message: moveResult.reason || 'Invalid move' });
             }
+
         } catch (error) {
-            console.error('Error handling game move:', error);
+            console.error('❌ Error handling game move:', error);
+            socket.emit('move_error', { message: 'Server error occurred' });
         }
     });
 
@@ -445,7 +489,6 @@ io.on('connection', (socket) => {
 
             room.resetGame();
 
-            // Notify all players in room
             io.to(roomId).emit('game_restart', {
                 gameState: {
                     board: room.gameBoard,
@@ -455,10 +498,10 @@ io.on('connection', (socket) => {
                 }
             });
 
-            console.log(`Game restarted in room: ${roomId}`);
+            console.log(`🔄 Game restarted in room: ${roomId}`);
 
         } catch (error) {
-            console.error('Error restarting game:', error);
+            console.error('❌ Error restarting game:', error);
         }
     });
 
@@ -471,7 +514,6 @@ io.on('connection', (socket) => {
 
             const chatMessage = room.addChatMessage(message, socket.id, sender);
 
-            // Broadcast message to other players in room (not sender)
             socket.to(roomId).emit('chat_message', {
                 message: chatMessage.message,
                 sender: chatMessage.senderName,
@@ -479,7 +521,7 @@ io.on('connection', (socket) => {
             });
 
         } catch (error) {
-            console.error('Error handling chat message:', error);
+            console.error('❌ Error handling chat message:', error);
         }
     });
 
@@ -489,7 +531,7 @@ io.on('connection', (socket) => {
 
     socket.on('disconnect', (reason) => {
         try {
-            console.log(`User disconnected: ${socket.id}, reason: ${reason}`);
+            console.log(`💔 User disconnected: ${socket.id}, reason: ${reason}`);
 
             const roomId = socket.roomId;
             if (roomId) {
@@ -497,30 +539,25 @@ io.on('connection', (socket) => {
                 if (room) {
                     const player = room.players.find(p => p.id === socket.id);
                     if (player) {
-                        console.log(`${player.name} disconnected from room: ${roomId}, reason: ${reason}`);
+                        console.log(`💔 ${player.name} disconnected from room: ${roomId}, reason: ${reason}`);
                         
-                        // إذا كان الانقطاع بسبب transport close، لا تحذف اللاعب فوراً
                         if (reason === 'transport close' || reason === 'client namespace disconnect') {
-                            console.log(`Temporary disconnect for ${player.name}, keeping in room for reconnection`);
-                            // أعط اللاعب وقت للإعادة الاتصال (30 ثانية)
+                            console.log(`⏳ Temporary disconnect for ${player.name}, keeping in room for 30s`);
                             setTimeout(() => {
                                 const currentRoom = gameRooms.get(roomId);
                                 if (currentRoom && currentRoom.players.find(p => p.id === socket.id)) {
-                                    console.log(`${player.name} did not reconnect, removing from room`);
+                                    console.log(`⏰ ${player.name} did not reconnect, removing from room`);
                                     currentRoom.removePlayer(socket.id);
                                     
-                                    // إبلاغ اللاعبين الآخرين
                                     socket.to(roomId).emit('player_left', { 
                                         player,
                                         message: `${player.name} left the room`
                                     });
                                 }
-                            }, 30000); // 30 ثانية
+                            }, 30000);
                         } else {
-                            // انقطاع دائم، احذف اللاعب فوراً
                             room.removePlayer(socket.id);
                             
-                            // Notify other players
                             socket.to(roomId).emit('player_left', { 
                                 player,
                                 message: `${player.name} left the room`
@@ -533,7 +570,7 @@ io.on('connection', (socket) => {
             playerSockets.delete(socket.id);
 
         } catch (error) {
-            console.error('Error handling disconnect:', error);
+            console.error('❌ Error handling disconnect:', error);
         }
     });
 });
@@ -553,7 +590,10 @@ app.get('/rooms', (req, res) => {
     const roomsInfo = Array.from(gameRooms.entries()).map(([id, room]) => ({
         id,
         players: room.players.length,
+        playerNames: room.players.map(p => p.name),
         active: room.gameActive,
+        board: room.gameBoard,
+        currentPlayer: room.currentPlayer,
         created: room.createdAt,
         lastActivity: room.lastActivity,
         hostConnected: room.hostConnected
@@ -564,29 +604,29 @@ app.get('/rooms', (req, res) => {
 
 // Error handling middleware
 app.use((error, req, res, next) => {
-    console.error('Server error:', error);
+    console.error('❌ Server error:', error);
     res.status(500).json({ error: 'Internal server error' });
 });
 
 // Start server
 server.listen(PORT, () => {
-    console.log(`XO Game server running on port ${PORT}`);
-    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`🚀 XO Game server running on port ${PORT}`);
+    console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
 });
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
-    console.log('SIGTERM received, shutting down gracefully');
+    console.log('🔴 SIGTERM received, shutting down gracefully');
     server.close(() => {
-        console.log('Server closed');
+        console.log('🔴 Server closed');
         process.exit(0);
     });
 });
 
 process.on('SIGINT', () => {
-    console.log('SIGINT received, shutting down gracefully');
+    console.log('🔴 SIGINT received, shutting down gracefully');
     server.close(() => {
-        console.log('Server closed');
+        console.log('🔴 Server closed');
         process.exit(0);
     });
 });
