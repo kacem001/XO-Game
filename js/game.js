@@ -13,6 +13,9 @@ let isChatOpen = false;
 let socket = null;
 let onlinePlayerData = { name: 'Player', avatar: null };
 let opponentData = { name: 'Opponent', avatar: null };
+let connectionStable = false;
+let heartbeatInterval = null;
+let roomStatusInterval = null;
 
 // Winning combinations
 const winningCombinations = [
@@ -132,17 +135,24 @@ function setupSocketConnection() {
     
     socket = io(serverUrl, {
         transports: ['websocket', 'polling'],
-        timeout: 20000,
+        timeout: 30000,
         reconnection: true,
-        reconnectionAttempts: 10,
-        reconnectionDelay: 2000,
-        forceNew: false
+        reconnectionAttempts: 20,
+        reconnectionDelay: 3000,
+        forceNew: false,
+        autoConnect: true
     });
     
     // إضافة مؤشر الاتصال
     socket.on('connect', () => {
-        console.log('✅ Connected to game server');
+        console.log('✅ Connected to game server. Socket ID:', socket.id);
+        connectionStable = true;
         showToast('Connected to server', 'success');
+        
+        // إيقاف الـ heartbeat القديم
+        if (heartbeatInterval) {
+            clearInterval(heartbeatInterval);
+        }
         
         // فحص حالة الغرفة عند الاتصال
         if (roomId) {
@@ -152,23 +162,37 @@ function setupSocketConnection() {
                 player: onlinePlayerData
             });
             
-            // طلب حالة الغرفة
-            fetchRoomStatus();
+            // بدء طلب حالة الغرفة بشكل منتظم
+            startRoomStatusFetching();
         }
+        
+        // بدء الـ heartbeat
+        startHeartbeat();
     });
     
     socket.on('disconnect', (reason) => {
         console.log('💔 Disconnected from server. Reason:', reason);
+        connectionStable = false;
         showToast('Connection lost. Reconnecting...', 'warning');
+        
+        // إيقاف الـ intervals
+        if (heartbeatInterval) {
+            clearInterval(heartbeatInterval);
+        }
+        if (roomStatusInterval) {
+            clearInterval(roomStatusInterval);
+        }
     });
     
     socket.on('connect_error', (error) => {
         console.error('❌ Connection error:', error);
+        connectionStable = false;
         showToast('Connection failed. Retrying...', 'error');
     });
     
     socket.on('reconnect', (attemptNumber) => {
         console.log('🔄 Reconnected after', attemptNumber, 'attempts');
+        connectionStable = true;
         showToast('Reconnected to server', 'success');
         
         if (roomId) {
@@ -176,6 +200,7 @@ function setupSocketConnection() {
                 roomId: roomId,
                 player: onlinePlayerData
             });
+            startRoomStatusFetching();
         }
     });
     
@@ -225,7 +250,7 @@ function setupSocketConnection() {
             updateGameState(data.gameState);
         }
         if (data.players && data.players.length > 1) {
-            const opponent = data.players.find(p => p.id !== socket.id);
+            const opponent = data.players.find(p => p.name !== onlinePlayerData.name);
             if (opponent) {
                 updateOpponentInfo(opponent);
                 hideWaitingOverlay();
@@ -253,6 +278,12 @@ function setupSocketConnection() {
     socket.on('room_error', (data) => {
         console.error('🚫 Room error:', data.message);
         showToast(data.message, 'error');
+        if (data.message.includes('not found')) {
+            // الغرفة غير موجودة - العودة للقائمة الرئيسية
+            setTimeout(() => {
+                goBack();
+            }, 2000);
+        }
     });
 
     socket.on('move_error', (data) => {
@@ -260,26 +291,75 @@ function setupSocketConnection() {
         showToast(data.message, 'error');
     });
 
-    // إرسال heartbeat منتظم للحفاظ على الاتصال
-    const heartbeatInterval = setInterval(() => {
+    socket.on('pong', () => {
+        console.log('💓 Heartbeat response received');
+    });
+
+    // تنظيف عند مغادرة الصفحة
+    window.addEventListener('beforeunload', () => {
+        cleanup();
+    });
+
+    // تنظيف عند إخفاء الصفحة (للموبايل)
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+            console.log('📱 Page hidden - maintaining connection');
+        } else {
+            console.log('📱 Page visible - checking connection');
+            if (socket && !socket.connected) {
+                socket.connect();
+            }
+        }
+    });
+}
+
+function startHeartbeat() {
+    if (heartbeatInterval) {
+        clearInterval(heartbeatInterval);
+    }
+    
+    heartbeatInterval = setInterval(() => {
         if (socket && socket.connected) {
             socket.emit('ping');
             console.log('💓 Heartbeat sent');
         } else {
+            console.log('💔 Socket not connected, stopping heartbeat');
             clearInterval(heartbeatInterval);
         }
-    }, 15000);
+    }, 20000); // كل 20 ثانية
+}
 
-    // تنظيف عند مغادرة الصفحة
-    window.addEventListener('beforeunload', () => {
-        clearInterval(heartbeatInterval);
-        if (socket && socket.connected) {
-            socket.emit('leave_room', {
-                roomId: roomId,
-                player: onlinePlayerData
-            });
+function startRoomStatusFetching() {
+    if (roomStatusInterval) {
+        clearInterval(roomStatusInterval);
+    }
+    
+    roomStatusInterval = setInterval(() => {
+        if (gameMode === 'online' && roomId && connectionStable) {
+            fetchRoomStatus();
         }
-    });
+    }, 15000); // كل 15 ثانية
+}
+
+function cleanup() {
+    console.log('🧹 Cleaning up connections...');
+    
+    if (heartbeatInterval) {
+        clearInterval(heartbeatInterval);
+        heartbeatInterval = null;
+    }
+    
+    if (roomStatusInterval) {
+        clearInterval(roomStatusInterval);
+        roomStatusInterval = null;
+    }
+    
+    if (socket && socket.connected) {
+        socket.emit('leave_room', {
+            roomId: roomId,
+            player: onlinePlayerData
+        });
+    }
 }
 
 // دالة لطلب حالة الغرفة من الخادم
@@ -290,14 +370,20 @@ async function fetchRoomStatus() {
             'https://xo-game-server-rtty.onrender.com';
             
         const response = await fetch(`${serverUrl}/rooms`);
-        const rooms = await response.json();
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
         
+        const rooms = await response.json();
         const currentRoom = rooms.find(room => room.id === roomId);
+        
         if (currentRoom) {
             console.log('📊 Current room status:', currentRoom);
             
-            // تحديث حالة اللعبة
-            if (currentRoom.board) {
+            // تحديث حالة اللعبة إذا تغيرت
+            if (currentRoom.board && 
+                JSON.stringify(currentRoom.board) !== JSON.stringify(gameBoard)) {
+                console.log('🔄 Board updated from server');
                 gameBoard = [...currentRoom.board];
                 gameActive = currentRoom.active;
                 currentPlayer = currentRoom.currentPlayer;
@@ -308,10 +394,36 @@ async function fetchRoomStatus() {
             // تحديث معلومات اللاعبين
             if (currentRoom.playerNames && currentRoom.playerNames.length > 1) {
                 hideWaitingOverlay();
+            } else if (currentRoom.playerNames && currentRoom.playerNames.length === 1) {
+                showWaitingOverlay();
             }
+            
+            // تحديث النقاط
+            if (currentRoom.scores) {
+                if (isHost) {
+                    player1.score = currentRoom.scores[onlinePlayerData.name] || 0;
+                    const opponentName = currentRoom.playerNames.find(name => name !== onlinePlayerData.name);
+                    if (opponentName) {
+                        player2.score = currentRoom.scores[opponentName] || 0;
+                    }
+                } else {
+                    player2.score = currentRoom.scores[onlinePlayerData.name] || 0;
+                    const hostName = currentRoom.playerNames.find(name => name !== onlinePlayerData.name);
+                    if (hostName) {
+                        player1.score = currentRoom.scores[hostName] || 0;
+                    }
+                }
+                updatePlayerInfo();
+            }
+            
+        } else {
+            console.log('⚠️ Room not found in server');
+            // الغرفة غير موجودة - قد تكون انتهت صلاحيتها
+            showToast('Room not found on server', 'warning');
         }
     } catch (error) {
         console.error('❌ Failed to fetch room status:', error);
+        // لا تعرض رسالة خطأ للمستخدم لأن هذا يحدث في الخلفية
     }
 }
 
@@ -328,13 +440,18 @@ function updateGameState(gameState) {
         currentPlayer = gameState.currentPlayer;
     }
     if (gameState.scores) {
-        const scoresArray = Object.values(gameState.scores);
         if (isHost) {
-            player1.score = scoresArray[0] || 0;
-            player2.score = scoresArray[1] || 0;
+            player1.score = gameState.scores[onlinePlayerData.name] || 0;
+            const opponentName = Object.keys(gameState.scores).find(name => name !== onlinePlayerData.name);
+            if (opponentName) {
+                player2.score = gameState.scores[opponentName] || 0;
+            }
         } else {
-            player1.score = scoresArray[1] || 0;
-            player2.score = scoresArray[0] || 0;
+            player2.score = gameState.scores[onlinePlayerData.name] || 0;
+            const hostName = Object.keys(gameState.scores).find(name => name !== onlinePlayerData.name);
+            if (hostName) {
+                player1.score = gameState.scores[hostName] || 0;
+            }
         }
     }
     
@@ -440,6 +557,7 @@ function handleCellClick(index) {
     // Check if cell is already filled or game is not active
     if (gameBoard[index] !== '' || !gameActive) {
         console.log('❌ Cell already filled or game not active');
+        showToast('Invalid move', 'warning');
         return;
     }
 
@@ -447,6 +565,13 @@ function handleCellClick(index) {
     if (gameMode === 'online' && !isMyTurn) {
         showToast("It's not your turn!", 'warning');
         console.log('❌ Not your turn');
+        return;
+    }
+
+    // Check connection for online games
+    if (gameMode === 'online' && (!socket || !socket.connected)) {
+        showToast("Connection lost. Please wait...", 'error');
+        console.log('❌ No connection');
         return;
     }
 
@@ -525,13 +650,18 @@ function handleOnlineGameMove(data) {
     
     // تحديث النتائج
     if (gameState && gameState.scores) {
-        const scoresArray = Object.values(gameState.scores);
         if (isHost) {
-            player1.score = scoresArray[0] || 0;
-            player2.score = scoresArray[1] || 0;
+            player1.score = gameState.scores[onlinePlayerData.name] || 0;
+            const opponentName = Object.keys(gameState.scores).find(name => name !== onlinePlayerData.name);
+            if (opponentName) {
+                player2.score = gameState.scores[opponentName] || 0;
+            }
         } else {
-            player1.score = scoresArray[1] || 0;
-            player2.score = scoresArray[0] || 0;
+            player2.score = gameState.scores[onlinePlayerData.name] || 0;
+            const hostName = Object.keys(gameState.scores).find(name => name !== onlinePlayerData.name);
+            if (hostName) {
+                player1.score = gameState.scores[hostName] || 0;
+            }
         }
         updatePlayerInfo();
     }
@@ -542,8 +672,8 @@ function handleOnlineGameMove(data) {
         
         if (gameEnd === 'win') {
             // تحديد الفائز
-            const isMyWin = (isHost && symbol === 'X') || (!isHost && symbol === 'O');
-            const message = isMyWin ? 'You win!' : 'You lose!';
+            const isMyWin = winner === onlinePlayerData.name;
+            const message = isMyWin ? 'You win! 🎉' : 'You lose! 😔';
             
             if (winningCells) {
                 highlightWinningCells(winningCells);
@@ -553,7 +683,7 @@ function handleOnlineGameMove(data) {
             playSound('win');
             
         } else if (gameEnd === 'draw') {
-            showGameResult('draw', "It's a draw!");
+            showGameResult('draw', "It's a draw! 🤝");
         }
         
     } else {
@@ -562,10 +692,10 @@ function handleOnlineGameMove(data) {
         updateBoardState();
         
         if (isMyTurn) {
-            showToast("Your turn!", 'info');
+            showToast("Your turn! 🎯", 'info');
             showTurnNotification();
         } else {
-            showToast("Opponent's turn", 'info');
+            showToast("Opponent's turn ⏳", 'info');
         }
     }
 }
@@ -604,13 +734,13 @@ function endGame(result) {
         if (gameMode === 'local') {
             winner = currentPlayer === 'X' ? player1 : player2;
             winner.score++;
-            message = `${winner.name} wins!`;
+            message = `${winner.name} wins! 🎉`;
         } else {
             return;
         }
         playSound('win');
     } else {
-        message = "It's a draw!";
+        message = "It's a draw! 🤝";
     }
 
     updatePlayerInfo();
@@ -664,14 +794,14 @@ function updateTurnIndicator() {
         }
     } else {
         if (isMyTurn) {
-            turnIndicator.textContent = "Your Turn";
+            turnIndicator.textContent = "Your Turn 🎯";
             if (isHost) {
                 player1Info.classList.add('current-player');
             } else {
                 player2Info.classList.add('current-player');
             }
         } else {
-            turnIndicator.textContent = "Opponent's Turn";
+            turnIndicator.textContent = "Opponent's Turn ⏳";
             if (isHost) {
                 player2Info.classList.add('current-player');
             } else {
@@ -709,7 +839,7 @@ function updateOpponentInfo(opponent) {
 
 function handleOnlineRestart() {
     resetGame();
-    showToast('Game restarted by opponent', 'info');
+    showToast('Game restarted by opponent 🔄', 'info');
 }
 
 function showWaitingOverlay() {
@@ -765,7 +895,7 @@ function resetScore() {
     player1.score = 0;
     player2.score = 0;
     updatePlayerInfo();
-    showToast('Scores reset!', 'info');
+    showToast('Scores reset! 🔄', 'info');
 }
 
 function playAgain() {
@@ -773,11 +903,9 @@ function playAgain() {
 }
 
 function goBack() {
-    if (gameMode === 'online' && socket) {
-        socket.emit('leave_room', {
-            roomId: roomId,
-            player: onlinePlayerData
-        });
+    cleanup();
+    
+    if (socket) {
         socket.disconnect();
     }
 
@@ -864,7 +992,7 @@ function updateChatNotification() {
 function copyRoomCode() {
     if (roomId) {
         navigator.clipboard.writeText(roomId).then(() => {
-            showToast('Room code copied!', 'success');
+            showToast('Room code copied! 📋', 'success');
         }).catch(() => {
             showToast('Failed to copy room code', 'error');
         });
@@ -874,7 +1002,7 @@ function copyRoomCode() {
 function showTurnNotification() {
     if ('Notification' in window && Notification.permission === 'granted') {
         new Notification('XO Game', {
-            body: "It's your turn!",
+            body: "It's your turn! 🎯",
             icon: '/favicon.ico'
         });
     }
@@ -911,7 +1039,7 @@ function playSound(type) {
         oscillator.start(audioContext.currentTime);
         oscillator.stop(audioContext.currentTime + (type === 'win' ? 0.5 : 0.1));
     } catch (error) {
-        // Silently fail if audio context is not supported
+        console.log('Audio not supported');
     }
 }
 
@@ -965,12 +1093,5 @@ function applyTheme() {
     const savedTheme = localStorage.getItem('xo_theme') || 'default';
     document.body.className = `theme-${savedTheme}`;
 }
-
-// Auto-fetch room status every 10 seconds if in online mode
-setInterval(() => {
-    if (gameMode === 'online' && roomId && socket && socket.connected) {
-        fetchRoomStatus();
-    }
-}, 10000);
 
 console.log('✅ Game.js loaded successfully');
