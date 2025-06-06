@@ -10,7 +10,7 @@ const maxReconnectAttempts = 5;
 // Initialize socket connection
 function initializeSocket() {
     // Use the deployed server URL or localhost for development
-    const serverUrl = window.location.hostname === 'localhost'
+    const serverUrl = window.location.hostname === 'https://xo-game-server-rtty.onrender.com'
         ? 'http://localhost:3000'
         : window.location.origin;
 
