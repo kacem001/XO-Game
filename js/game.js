@@ -10,6 +10,7 @@ let roomId = null;
 let isHost = false;
 let unreadMessages = 0;
 let isChatOpen = false;
+let socket = null; // إضافة متغير Socket
 
 // Winning combinations
 const winningCombinations = [
@@ -30,6 +31,8 @@ function initializeGame() {
     gameMode = localStorage.getItem('xo_game_mode') || 'local';
     roomId = localStorage.getItem('xo_room_id');
     isHost = localStorage.getItem('xo_is_host') === 'true';
+
+    console.log('Game mode:', gameMode, 'Room ID:', roomId, 'Is Host:', isHost);
 
     // Load player data
     const savedPlayer1 = localStorage.getItem('xo_player1_data');
@@ -69,9 +72,7 @@ function initializeGame() {
         document.getElementById('chatFab').style.display = 'flex';
 
         // Initialize online features
-        if (window.socketAPI) {
-            window.socketAPI.initializeOnlineFeatures();
-        }
+        initializeOnlineMode();
 
         // Set turn based on host status
         isMyTurn = isHost;
@@ -88,6 +89,125 @@ function initializeGame() {
     updatePlayerInfo();
     updateTurnIndicator();
     initializeBoard();
+}
+
+function initializeOnlineMode() {
+    if (!window.io) {
+        // تحميل Socket.io إذا لم يكن محملاً
+        const script = document.createElement('script');
+        script.src = 'https://cdn.socket.io/4.7.4/socket.io.min.js';
+        script.onload = () => {
+            setupSocketConnection();
+        };
+        document.head.appendChild(script);
+    } else {
+        setupSocketConnection();
+    }
+}
+
+function setupSocketConnection() {
+    const serverUrl = window.location.hostname === 'localhost' ? 
+        'http://localhost:3000' : 
+        'https://xo-game-server-rtty.onrender.com';
+    
+    console.log('Connecting to server:', serverUrl);
+    
+    socket = io(serverUrl, {
+        transports: ['websocket', 'polling'],
+        timeout: 20000,
+        reconnection: true,
+        reconnectionAttempts: 5,
+        reconnectionDelay: 1000
+    });
+    
+    socket.on('connect', () => {
+        console.log('Connected to game server');
+        showToast('Connected to server', 'success');
+        
+        if (roomId) {
+            // الانضمام للغرفة مرة أخرى
+            const currentPlayerData = JSON.parse(localStorage.getItem('xo_current_player') || '{}');
+            socket.emit('rejoin_room', {
+                roomId: roomId,
+                player: currentPlayerData
+            });
+        }
+    });
+    
+    socket.on('disconnect', () => {
+        console.log('Disconnected from server');
+        showToast('Connection lost', 'error');
+    });
+    
+    socket.on('connect_error', (error) => {
+        console.error('Connection error:', error);
+        showToast('Failed to connect to server', 'error');
+    });
+    
+    // Room events
+    socket.on('player_joined', (data) => {
+        console.log('Player joined:', data);
+        updateOpponentInfo(data.player);
+        hideWaitingOverlay();
+        showToast(`${data.player.name} joined the game!`, 'success');
+        localStorage.setItem('xo_opponent', JSON.stringify(data.player));
+    });
+    
+    socket.on('player_left', (data) => {
+        console.log('Player left:', data);
+        showToast(`${data.player.name} left the game`, 'warning');
+        showWaitingOverlay();
+        localStorage.removeItem('xo_opponent');
+        
+        // Reset opponent info
+        if (isHost) {
+            player2 = { name: 'Player 2', avatar: null, score: 0 };
+        } else {
+            player1 = { name: 'Player 1', avatar: null, score: 0 };
+        }
+        updatePlayerInfo();
+    });
+    
+    // Game events
+    socket.on('game_move', (data) => {
+        console.log('Received move:', data);
+        handleOnlineGameMove(data);
+    });
+    
+    socket.on('game_restart', (data) => {
+        console.log('Game restarted by opponent');
+        handleOnlineRestart();
+    });
+    
+    socket.on('game_state', (data) => {
+        console.log('Received game state:', data);
+        // تحديث حالة اللعبة من الخادم
+        if (data.gameState) {
+            gameBoard = data.gameState.board;
+            gameActive = data.gameState.active;
+            currentPlayer = data.gameState.currentPlayer;
+            
+            // تحديث الواجهة
+            initializeBoard();
+            updateTurnIndicator();
+        }
+    });
+    
+    // Chat events
+    socket.on('chat_message', (data) => {
+        console.log('Received chat message:', data);
+        const senderName = isHost ? player2.name : player1.name;
+        addChatMessage(data.message, senderName, false);
+    });
+    
+    socket.on('turn_notification', (data) => {
+        if (data.isYourTurn) {
+            isMyTurn = true;
+            updateBoardState();
+            showTurnNotification();
+            showToast("It's your turn!", 'info');
+        }
+    });
 }
 
 function setupEventListeners() {
@@ -113,7 +233,14 @@ function initializeBoard() {
     const cells = document.querySelectorAll('.cell');
     cells.forEach((cell, index) => {
         cell.textContent = gameBoard[index];
-        cell.classList.remove('winning', 'disabled');
+        cell.classList.remove('winning', 'disabled', 'x-symbol', 'o-symbol');
+        
+        // Add symbol class
+        if (gameBoard[index] === 'X') {
+            cell.classList.add('x-symbol');
+        } else if (gameBoard[index] === 'O') {
+            cell.classList.add('o-symbol');
+        }
 
         if (gameMode === 'online' && !isMyTurn) {
             cell.classList.add('disabled');
@@ -165,10 +292,17 @@ function handleCellClick(index) {
     makeMove(index);
 
     // Send move to server if online game
-    if (gameMode === 'online' && window.socketAPI) {
-        window.socketAPI.sendGameMove(index);
+    if (gameMode === 'online' && socket && socket.connected) {
+        const currentPlayerData = JSON.parse(localStorage.getItem('xo_current_player') || '{}');
+        socket.emit('game_move', {
+            roomId: roomId,
+            index: index,
+            player: currentPlayerData
+        });
+        
         isMyTurn = false;
         updateBoardState();
+        showToast("Waiting for opponent...", 'info');
     }
 }
 
@@ -181,16 +315,74 @@ function makeMove(index) {
     // Play sound effect
     playSound('move');
 
-    // Check for win or draw
-    if (checkWin()) {
-        endGame('win');
-    } else if (checkDraw()) {
-        endGame('draw');
-    } else {
-        // Switch player only in local mode
-        if (gameMode === 'local') {
+    // Check for win or draw (only in local mode)
+    if (gameMode === 'local') {
+        if (checkWin()) {
+            endGame('win');
+        } else if (checkDraw()) {
+            endGame('draw');
+        } else {
             currentPlayer = currentPlayer === 'X' ? 'O' : 'X';
             updateTurnIndicator();
+        }
+    }
+}
+
+function handleOnlineGameMove(data) {
+    const { index, symbol, gameState, gameEnd, winner, winningCells } = data;
+    
+    // تحديث اللوحة
+    gameBoard = gameState.board;
+    gameActive = gameState.active;
+    currentPlayer = gameState.currentPlayer;
+    
+    // تحديث الواجهة
+    initializeBoard();
+    
+    // تحديث النتائج
+    if (gameState.scores) {
+        const scoresArray = Object.values(gameState.scores);
+        if (isHost) {
+            player1.score = scoresArray[0] || 0;
+            player2.score = scoresArray[1] || 0;
+        } else {
+            player1.score = scoresArray[1] || 0;
+            player2.score = scoresArray[0] || 0;
+        }
+        updatePlayerInfo();
+    }
+    
+    // Play sound effect
+    playSound('move');
+    
+    // التحقق من انتهاء اللعبة
+    if (gameEnd) {
+        gameActive = false;
+        
+        if (gameEnd === 'win') {
+            // تحديد الفائز
+            const isMyWin = (isHost && symbol === 'X') || (!isHost && symbol === 'O');
+            const message = isMyWin ? 'You win!' : 'You lose!';
+            
+            if (winningCells) {
+                highlightWinningCells(winningCells);
+            }
+            
+            showGameResult('win', message);
+            playSound('win');
+            
+        } else if (gameEnd === 'draw') {
+            showGameResult('draw', "It's a draw!");
+        }
+        
+    } else {
+        // تحديد الدور التالي
+        isMyTurn = (isHost && currentPlayer === 'X') || (!isHost && currentPlayer === 'O');
+        updateBoardState();
+        
+        if (isMyTurn) {
+            showToast("Your turn!", 'info');
+            showTurnNotification();
         }
     }
 }
@@ -228,18 +420,8 @@ function endGame(result) {
             winner.score++;
             message = `${winner.name} wins!`;
         } else {
-            // Online mode - determine winner based on current player
-            if ((currentPlayer === 'X' && isHost) || (currentPlayer === 'O' && !isHost)) {
-                winner = 'you';
-                message = 'You win!';
-                if (isHost) player1.score++;
-                else player2.score++;
-            } else {
-                winner = 'opponent';
-                message = 'You lose!';
-                if (isHost) player2.score++;
-                else player1.score++;
-            }
+            // سيتم التعامل مع هذا في handleOnlineGameMove
+            return;
         }
         playSound('win');
     } else {
@@ -317,7 +499,7 @@ function updateBoardState() {
     const cells = document.querySelectorAll('.cell');
     cells.forEach(cell => {
         if (gameMode === 'online') {
-            if (isMyTurn) {
+            if (isMyTurn && gameActive && cell.textContent === '') {
                 cell.classList.remove('disabled');
             } else {
                 cell.classList.add('disabled');
@@ -327,29 +509,10 @@ function updateBoardState() {
     updateTurnIndicator();
 }
 
-// Online game functions
+// Online game functions - Legacy support
 function handleOnlineMove(index, player) {
-    if (gameBoard[index] === '' && gameActive) {
-        gameBoard[index] = player.symbol || (isHost ? 'O' : 'X');
-        const cell = document.querySelector(`[data-index="${index}"]`);
-        cell.textContent = gameBoard[index];
-        cell.classList.add(gameBoard[index] === 'X' ? 'x-symbol' : 'o-symbol');
-
-        currentPlayer = gameBoard[index];
-
-        // Play sound effect
-        playSound('move');
-
-        // Check for win or draw
-        if (checkWin()) {
-            endGame('win');
-        } else if (checkDraw()) {
-            endGame('draw');
-        } else {
-            isMyTurn = true;
-            updateBoardState();
-        }
-    }
+    // هذه الدالة للتوافق مع الكود القديم
+    console.log('Legacy handleOnlineMove called');
 }
 
 function handleOnlineRestart() {
@@ -393,8 +556,8 @@ function resetGameForDisconnection() {
 
 // Game control functions
 function restartGame() {
-    if (gameMode === 'online' && window.socketAPI) {
-        window.socketAPI.sendGameRestart();
+    if (gameMode === 'online' && socket && socket.connected) {
+        socket.emit('game_restart', { roomId: roomId });
     }
     resetGame();
 }
@@ -429,9 +592,12 @@ function playAgain() {
 
 function goBack() {
     // Clean up online connection
-    if (gameMode === 'online' && window.socketAPI) {
-        window.socketAPI.leaveRoom();
-        window.socketAPI.cleanupSocket();
+    if (gameMode === 'online' && socket) {
+        socket.emit('leave_room', {
+            roomId: roomId,
+            player: JSON.parse(localStorage.getItem('xo_current_player') || '{}')
+        });
+        socket.disconnect();
     }
 
     // Clear game data
@@ -466,13 +632,17 @@ function sendMessage() {
     const input = document.getElementById('chatInput');
     const message = input.value.trim();
 
-    if (message && gameMode === 'online' && window.socketAPI) {
-        if (window.socketAPI.sendChatMessage(message)) {
-            addChatMessage(message, player1.name || player2.name, true);
-            input.value = '';
-        } else {
-            showToast('Failed to send message', 'error');
-        }
+    if (message && gameMode === 'online' && socket && socket.connected) {
+        const currentPlayerData = JSON.parse(localStorage.getItem('xo_current_player') || '{}');
+        
+        socket.emit('chat_message', {
+            roomId: roomId,
+            message: message,
+            sender: currentPlayerData.name || 'Player'
+        });
+        
+        addChatMessage(message, currentPlayerData.name || 'You', true);
+        input.value = '';
     }
 }
 
@@ -573,14 +743,49 @@ function showToast(message, type = 'info') {
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
     toast.textContent = message;
+    
+    // Style the toast
+    const colors = {
+        info: '#667eea',
+        success: '#27ae60',
+        error: '#e74c3c',
+        warning: '#f39c12'
+    };
+    
+    toast.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: ${colors[type] || colors.info};
+        color: white;
+        padding: 15px 25px;
+        border-radius: 10px;
+        box-shadow: 0 5px 20px rgba(0, 0, 0, 0.3);
+        transform: translateX(100%);
+        transition: transform 0.3s ease;
+        z-index: 3000;
+        max-width: 300px;
+        font-family: 'Poppins', sans-serif;
+        font-weight: 500;
+    `;
+    
     document.body.appendChild(toast);
-
+    
     // Show toast
-    setTimeout(() => toast.classList.add('active'), 100);
-
+    setTimeout(() => {
+        toast.style.transform = 'translateX(0)';
+    }, 100);
+    
     // Hide toast after 3 seconds
     setTimeout(() => {
-        toast.classList.remove('active');
+        toast.style.transform = 'translateX(100%)';
         setTimeout(() => toast.remove(), 300);
     }, 3000);
 }
+
+function applyTheme() {
+    const savedTheme = localStorage.getItem('xo_theme') || 'default';
+    document.body.className = `theme-${savedTheme}`;
+}
+
+console.log('Game.js loaded successfully');
