@@ -183,6 +183,15 @@ io.on('connection', (socket) => {
     // Send connection confirmation
     socket.emit('connected', { message: 'Connected successfully!' });
 
+    // أضف هذين السطرين الجديدين:
+    socket.on('room_created_confirm', (data) => {
+        console.log(`Room creation confirmed for: ${data.roomId}`);
+    });
+
+    socket.on('ping', () => {
+        socket.emit('pong');
+    });
+
     socket.on('create_room', (playerData) => {
         try {
             const roomId = generateRoomId();
