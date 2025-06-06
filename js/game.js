@@ -208,6 +208,27 @@ function setupSocketConnection() {
             showToast("It's your turn!", 'info');
         }
     });
+
+    // إرسال heartbeat منتظم للحفاظ على الاتصال
+    const heartbeatInterval = setInterval(() => {
+        if (socket && socket.connected) {
+            socket.emit('ping');
+            console.log('Heartbeat sent');
+        } else {
+            clearInterval(heartbeatInterval);
+        }
+    }, 15000); // كل 15 ثانية
+
+    // تنظيف عند مغادرة الصفحة
+    window.addEventListener('beforeunload', () => {
+        clearInterval(heartbeatInterval);
+        if (socket && socket.connected) {
+            socket.emit('leave_room', {
+                roomId: roomId,
+                player: onlinePlayerData
+            });
+        }
+    });
 }
 
 function setupEventListeners() {
