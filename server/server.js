@@ -191,7 +191,31 @@ io.on('connection', (socket) => {
     socket.on('ping', () => {
         socket.emit('pong');
     });
-
+socket.on('rejoin_room', (data) => {
+    try {
+        const { roomId, player } = data;
+        const room = gameRooms.get(roomId);
+        
+        if (room) {
+            socket.join(roomId);
+            socket.roomId = roomId;
+            console.log(`${player.name} rejoined room: ${roomId}`);
+            
+            // إرسال حالة اللعبة الحالية
+            socket.emit('game_state', {
+                gameState: {
+                    board: room.gameBoard,
+                    currentPlayer: room.currentPlayer,
+                    active: room.gameActive,
+                    scores: room.scores
+                },
+                players: room.players
+            });
+        }
+    } catch (error) {
+        console.error('Error rejoining room:', error);
+    }
+});
     socket.on('create_room', (playerData) => {
         try {
             const roomId = generateRoomId();
