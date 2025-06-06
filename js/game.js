@@ -10,7 +10,9 @@ let roomId = null;
 let isHost = false;
 let unreadMessages = 0;
 let isChatOpen = false;
-let socket = null; // إضافة متغير Socket
+let socket = null;
+let onlinePlayerData = { name: 'Player', avatar: null }; // إضافة هذا المتغير
+let opponentData = { name: 'Opponent', avatar: null }; // إضافة هذا المتغير
 
 // Winning combinations
 const winningCombinations = [
@@ -38,7 +40,7 @@ function initializeGame() {
     const savedPlayer1 = localStorage.getItem('xo_player1_data');
     const savedPlayer2 = localStorage.getItem('xo_player2_data');
     const currentPlayerData = localStorage.getItem('xo_current_player');
-    const opponentData = localStorage.getItem('xo_opponent');
+    const opponentDataSaved = localStorage.getItem('xo_opponent');
 
     if (gameMode === 'local') {
         // Local game setup
@@ -51,16 +53,19 @@ function initializeGame() {
     } else {
         // Online game setup
         if (currentPlayerData) {
-            const currentPlayer = JSON.parse(currentPlayerData);
+            onlinePlayerData = JSON.parse(currentPlayerData);
+            
             if (isHost) {
-                player1 = { ...player1, ...currentPlayer };
-                if (opponentData) {
-                    player2 = { ...player2, ...JSON.parse(opponentData) };
+                player1 = { ...player1, ...onlinePlayerData };
+                if (opponentDataSaved) {
+                    opponentData = JSON.parse(opponentDataSaved);
+                    player2 = { ...player2, ...opponentData };
                 }
             } else {
-                player2 = { ...player2, ...currentPlayer };
-                if (opponentData) {
-                    player1 = { ...player1, ...JSON.parse(opponentData) };
+                player2 = { ...player2, ...onlinePlayerData };
+                if (opponentDataSaved) {
+                    opponentData = JSON.parse(opponentDataSaved);
+                    player1 = { ...player1, ...opponentData };
                 }
             }
         }
@@ -126,10 +131,9 @@ function setupSocketConnection() {
         
         if (roomId) {
             // الانضمام للغرفة مرة أخرى
-            const currentPlayerData = JSON.parse(localStorage.getItem('xo_current_player') || '{}');
             socket.emit('rejoin_room', {
                 roomId: roomId,
-                player: currentPlayerData
+                player: onlinePlayerData
             });
         }
     });
@@ -309,35 +313,40 @@ function handleCellClick(index) {
         return;
     }
 
-    // Make the move
-    makeMove(index);
+    console.log('Making move at index:', index, 'Player data:', onlinePlayerData);
+
+    // Make the move locally first
+    const mySymbol = (gameMode === 'online') ? (isHost ? 'X' : 'O') : currentPlayer;
+    gameBoard[index] = mySymbol;
+    
+    const cell = document.querySelector(`[data-index="${index}"]`);
+    if (cell) {
+        cell.textContent = mySymbol;
+        cell.classList.add(mySymbol === 'X' ? 'x-symbol' : 'o-symbol');
+    }
+
+    // Play sound effect
+    playSound('move');
 
     // Send move to server if online game
     if (gameMode === 'online' && socket && socket.connected) {
-        const currentPlayerData = JSON.parse(localStorage.getItem('xo_current_player') || '{}');
+        console.log('Sending move to server:', {
+            roomId: roomId,
+            index: index,
+            player: onlinePlayerData
+        });
+        
         socket.emit('game_move', {
             roomId: roomId,
             index: index,
-            player: currentPlayerData
+            player: onlinePlayerData
         });
         
         isMyTurn = false;
         updateBoardState();
         showToast("Waiting for opponent...", 'info');
-    }
-}
-
-function makeMove(index) {
-    gameBoard[index] = currentPlayer;
-    const cell = document.querySelector(`[data-index="${index}"]`);
-    cell.textContent = currentPlayer;
-    cell.classList.add(currentPlayer === 'X' ? 'x-symbol' : 'o-symbol');
-
-    // Play sound effect
-    playSound('move');
-
-    // Check for win or draw (only in local mode)
-    if (gameMode === 'local') {
+    } else if (gameMode === 'local') {
+        // Local game logic
         if (checkWin()) {
             endGame('win');
         } else if (checkDraw()) {
@@ -350,18 +359,27 @@ function makeMove(index) {
 }
 
 function handleOnlineGameMove(data) {
+    console.log('Handling online move:', data);
+    
     const { index, symbol, gameState, gameEnd, winner, winningCells } = data;
     
-    // تحديث اللوحة
-    gameBoard = gameState.board;
-    gameActive = gameState.active;
-    currentPlayer = gameState.currentPlayer;
-    
-    // تحديث الواجهة
-    initializeBoard();
+    // تحديث اللوحة من الخادم
+    if (gameState && gameState.board) {
+        gameBoard = [...gameState.board];
+        gameActive = gameState.active;
+        currentPlayer = gameState.currentPlayer;
+        
+        // تحديث الواجهة
+        initializeBoard();
+        
+        // Play sound effect for opponent's move
+        if (symbol !== (isHost ? 'X' : 'O')) {
+            playSound('move');
+        }
+    }
     
     // تحديث النتائج
-    if (gameState.scores) {
+    if (gameState && gameState.scores) {
         const scoresArray = Object.values(gameState.scores);
         if (isHost) {
             player1.score = scoresArray[0] || 0;
@@ -372,9 +390,6 @@ function handleOnlineGameMove(data) {
         }
         updatePlayerInfo();
     }
-    
-    // Play sound effect
-    playSound('move');
     
     // التحقق من انتهاء اللعبة
     if (gameEnd) {
@@ -404,6 +419,8 @@ function handleOnlineGameMove(data) {
         if (isMyTurn) {
             showToast("Your turn!", 'info');
             showTurnNotification();
+        } else {
+            showToast("Opponent's turn", 'info');
         }
     }
 }
@@ -530,10 +547,15 @@ function updateBoardState() {
     updateTurnIndicator();
 }
 
-// Online game functions - Legacy support
-function handleOnlineMove(index, player) {
-    // هذه الدالة للتوافق مع الكود القديم
-    console.log('Legacy handleOnlineMove called');
+function updateOpponentInfo(opponent) {
+    opponentData = opponent;
+    
+    if (isHost) {
+        player2 = { ...player2, ...opponent };
+    } else {
+        player1 = { ...player1, ...opponent };
+    }
+    updatePlayerInfo();
 }
 
 function handleOnlineRestart() {
@@ -559,15 +581,6 @@ function hideWaitingOverlay() {
     if (overlay) {
         overlay.style.display = 'none';
     }
-}
-
-function updateOpponentInfo(opponent) {
-    if (isHost) {
-        player2 = { ...player2, ...opponent };
-    } else {
-        player1 = { ...player1, ...opponent };
-    }
-    updatePlayerInfo();
 }
 
 function resetGameForDisconnection() {
@@ -616,7 +629,7 @@ function goBack() {
     if (gameMode === 'online' && socket) {
         socket.emit('leave_room', {
             roomId: roomId,
-            player: JSON.parse(localStorage.getItem('xo_current_player') || '{}')
+            player: onlinePlayerData
         });
         socket.disconnect();
     }
@@ -654,15 +667,13 @@ function sendMessage() {
     const message = input.value.trim();
 
     if (message && gameMode === 'online' && socket && socket.connected) {
-        const currentPlayerData = JSON.parse(localStorage.getItem('xo_current_player') || '{}');
-        
         socket.emit('chat_message', {
             roomId: roomId,
             message: message,
-            sender: currentPlayerData.name || 'Player'
+            sender: onlinePlayerData.name || 'Player'
         });
         
-        addChatMessage(message, currentPlayerData.name || 'You', true);
+        addChatMessage(message, onlinePlayerData.name || 'You', true);
         input.value = '';
     }
 }
@@ -792,12 +803,10 @@ function showToast(message, type = 'info') {
     
     document.body.appendChild(toast);
     
-    // Show toast
     setTimeout(() => {
         toast.style.transform = 'translateX(0)';
     }, 100);
     
-    // Hide toast after 3 seconds
     setTimeout(() => {
         toast.style.transform = 'translateX(100%)';
         setTimeout(() => toast.remove(), 300);
