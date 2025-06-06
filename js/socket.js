@@ -1,60 +1,78 @@
-// Socket connection
 let socket = null;
 let isOnline = false;
 let currentRoom = null;
 let isRoomHost = false;
 let onlineOpponent = null;
+let reconnectAttempts = 0;
+const maxReconnectAttempts = 5;
 
-// عنوان الخادم الحقيقي
 const getServerUrl = () => {
-    // ضع هنا رابط الخادم من Render بعد النشر
-    if (window.location.hostname === 'localhost') {
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
         return 'http://localhost:3000';
     }
-    return 'https://xo-game-server-rtty.onrender.com'; // سنغيره بعد النشر
+    // استخدام رابط Render الحقيقي
+    return 'https://xo-game-server-rtty.onrender.com';
 };
 
 function initializeSocket() {
     const serverUrl = getServerUrl();
+    console.log('Connecting to server:', serverUrl);
     
     try {
         socket = io(serverUrl, {
             transports: ['websocket', 'polling'],
+            upgrade: true,
             timeout: 20000,
-            forceNew: true
+            forceNew: false,
+            reconnection: true,
+            reconnectionAttempts: 5,
+            reconnectionDelay: 1000,
+            autoConnect: true,
+            // إعدادات مهمة لـ Render
+            secure: true,
+            rejectUnauthorized: false
         });
         
         setupSocketListeners();
         
     } catch (error) {
-        console.error('Failed to connect to server:', error);
+        console.error('Failed to initialize socket:', error);
         showToast('Failed to connect to server', 'error');
     }
 }
 
 function setupSocketListeners() {
     socket.on('connect', () => {
-        console.log('Connected to server');
+        console.log('Connected to server successfully!');
         showToast('Connected to server', 'success');
         isOnline = true;
+        reconnectAttempts = 0;
     });
     
-    socket.on('disconnect', () => {
-        console.log('Disconnected from server');
-        showToast('Disconnected from server', 'error');
+    socket.on('connected', (data) => {
+        console.log('Server confirmed connection:', data.message);
+    });
+    
+    socket.on('disconnect', (reason) => {
+        console.log('Disconnected from server. Reason:', reason);
         isOnline = false;
+        
+        // لا تظهر رسالة خطأ إذا كان الانقطاع مقصود
+        if (reason !== 'io client disconnect') {
+            showToast('Connection lost. Trying to reconnect...', 'warning');
+        }
     });
     
     socket.on('connect_error', (error) => {
         console.error('Connection error:', error);
-        showToast('Cannot connect to server', 'error');
+        handleConnectionError();
     });
     
     // Room events
     socket.on('room_created', (data) => {
+        console.log('Room created successfully:', data);
         currentRoom = data.roomId;
         isRoomHost = true;
-        console.log('Room created:', data.roomId);
         
         // حفظ بيانات الغرفة
         localStorage.setItem('xo_game_mode', 'online');
@@ -62,20 +80,29 @@ function setupSocketListeners() {
         localStorage.setItem('xo_is_host', 'true');
         localStorage.setItem('xo_current_player', JSON.stringify(getCurrentPlayerData()));
         
-        showToast(`Room ${data.roomId} created!`, 'success');
+        showToast(`Room ${data.roomId} created! Waiting for players...`, 'success');
         
-        // الانتقال للعبة
+        // إرسال تأكيد للخادم أن الغرفة تم إنشاؤها بنجاح
+        socket.emit('room_created_confirm', { roomId: data.roomId });
+        
+        // عدم الانتقال مباشرة - البقاء في الصفحة الحالية حتى ينضم لاعب
         setTimeout(() => {
-            window.location.href = 'game.html';
-        }, 1500);
+            showToast('Share room code: ' + data.roomId, 'info');
+        }, 2000);
+        
+        // الانتقال فقط عند انضمام لاعب أو بعد مهلة طويلة
+        setTimeout(() => {
+            if (currentRoom) {
+                window.location.href = 'game.html';
+            }
+        }, 30000); // 30 ثانية انتظار
     });
     
     socket.on('room_joined', (data) => {
+        console.log('Room joined successfully:', data);
         currentRoom = data.roomId;
         isRoomHost = false;
         onlineOpponent = data.opponent;
-        
-        console.log('Joined room:', data.roomId);
         
         // حفظ بيانات الغرفة
         localStorage.setItem('xo_game_mode', 'online');
@@ -86,7 +113,7 @@ function setupSocketListeners() {
         
         showToast(`Joined room ${data.roomId}!`, 'success');
         
-        // الانتقال للعبة
+        // الانتقال للعبة فوراً
         setTimeout(() => {
             window.location.href = 'game.html';
         }, 1500);
@@ -95,6 +122,11 @@ function setupSocketListeners() {
     socket.on('room_error', (data) => {
         console.error('Room error:', data.message);
         showToast(data.message, 'error');
+        
+        // إعادة محاولة إذا كانت الغرفة غير موجودة
+        if (data.message === 'Room not found') {
+            showToast('Room may have expired. Try creating a new one.', 'warning');
+        }
     });
     
     socket.on('room_full', () => {
@@ -102,20 +134,20 @@ function setupSocketListeners() {
     });
     
     socket.on('player_joined', (data) => {
-        console.log('Player joined:', data.player.name);
+        console.log('Player joined room:', data);
         onlineOpponent = data.player;
         showToast(`${data.player.name} joined the room!`, 'success');
         
-        // إخفاء شاشة الانتظار إذا كنا في اللعبة
-        if (typeof hideWaitingOverlay === 'function') {
-            hideWaitingOverlay();
-        }
-        
+        // الآن يمكن الانتقال للعبة
         localStorage.setItem('xo_opponent', JSON.stringify(data.player));
+        
+        setTimeout(() => {
+            window.location.href = 'game.html';
+        }, 2000);
     });
     
     socket.on('player_left', (data) => {
-        console.log('Player left:', data.player.name);
+        console.log('Player left room:', data);
         showToast(`${data.player.name} left the room`, 'warning');
         onlineOpponent = null;
         localStorage.removeItem('xo_opponent');
@@ -128,35 +160,52 @@ function setupSocketListeners() {
         }
     });
     
-    socket.on('game_restart', () => {
-        if (typeof handleOnlineRestart === 'function') {
-            handleOnlineRestart();
-        }
-    });
-    
     socket.on('chat_message', (data) => {
         if (typeof addChatMessage === 'function') {
             addChatMessage(data.message, data.sender, false);
         }
     });
     
-    socket.on('turn_notification', (data) => {
-        if (data.isYourTurn) {
-            showToast("It's your turn!", 'info');
-            if ('Notification' in window && Notification.permission === 'granted') {
-                new Notification('XO Game', {
-                    body: "It's your turn!",
-                    icon: '/favicon.ico'
-                });
-            }
-        }
+    // Test connection
+    socket.on('test_response', (data) => {
+        console.log('Test response:', data.message);
     });
 }
 
-// دوال إرسال البيانات للخادم
+function handleConnectionError() {
+    if (reconnectAttempts < maxReconnectAttempts) {
+        reconnectAttempts++;
+        showToast(`Reconnecting... (${reconnectAttempts}/${maxReconnectAttempts})`, 'warning');
+        
+        setTimeout(() => {
+            if (socket && !socket.connected) {
+                socket.connect();
+            }
+        }, 2000 * reconnectAttempts);
+    } else {
+        showToast('Failed to connect to server. Please refresh the page.', 'error');
+    }
+}
+
 function createOnlineRoom() {
-    if (!socket || !socket.connected) {
+    if (!socket) {
+        console.error('Socket not initialized');
+        showToast('Connection not ready. Please try again.', 'error');
+        return;
+    }
+    
+    if (!socket.connected) {
         showToast('Not connected to server. Please wait...', 'error');
+        
+        // محاولة الاتصال مرة أخرى
+        socket.connect();
+        
+        // انتظار الاتصال ثم المحاولة مرة أخرى
+        setTimeout(() => {
+            if (socket.connected) {
+                createOnlineRoom();
+            }
+        }, 3000);
         return;
     }
     
@@ -167,12 +216,35 @@ function createOnlineRoom() {
     }
     
     console.log('Creating room with player:', playerData);
+    
+    // إرسال heartbeat للتأكد من الاتصال
+    socket.emit('test_connection');
+    
+    // إرسال طلب إنشاء الغرفة
     socket.emit('create_room', playerData);
+    
+    showToast('Creating room...', 'info');
 }
 
 function joinOnlineRoom(roomId) {
-    if (!socket || !socket.connected) {
+    if (!socket) {
+        console.error('Socket not initialized');
+        showToast('Connection not ready. Please try again.', 'error');
+        return;
+    }
+    
+    if (!socket.connected) {
         showToast('Not connected to server. Please wait...', 'error');
+        
+        // محاولة الاتصال مرة أخرى
+        socket.connect();
+        
+        // انتظار الاتصال ثم المحاولة مرة أخرى
+        setTimeout(() => {
+            if (socket.connected) {
+                joinOnlineRoom(roomId);
+            }
+        }, 3000);
         return;
     }
     
@@ -188,10 +260,17 @@ function joinOnlineRoom(roomId) {
     }
     
     console.log('Joining room:', roomId, 'with player:', playerData);
+    
+    // إرسال heartbeat للتأكد من الاتصال
+    socket.emit('test_connection');
+    
+    // إرسال طلب الانضمام للغرفة
     socket.emit('join_room', { 
         roomId: roomId.toUpperCase(), 
         player: playerData 
     });
+    
+    showToast('Joining room...', 'info');
 }
 
 function getCurrentPlayerData() {
@@ -215,43 +294,24 @@ function getCurrentPlayerData() {
     return playerData;
 }
 
-function sendGameMove(index) {
-    if (socket && socket.connected && currentRoom) {
-        socket.emit('game_move', {
-            roomId: currentRoom,
-            index: index,
-            player: getCurrentPlayerData()
-        });
+function testConnection() {
+    if (socket && socket.connected) {
+        socket.emit('test_connection');
+        showToast('Testing connection...', 'info');
+    } else {
+        console.log('Socket not connected');
+        showToast('Not connected to server', 'error');
     }
 }
 
-function sendChatMessage(message) {
-    if (socket && socket.connected && currentRoom && message.trim()) {
-        socket.emit('chat_message', {
-            roomId: currentRoom,
-            message: message.trim(),
-            sender: getCurrentPlayerData().name
-        });
-        return true;
+function keepAlive() {
+    if (socket && socket.connected) {
+        socket.emit('ping');
     }
-    return false;
 }
 
-function leaveRoom() {
-    if (socket && socket.connected && currentRoom) {
-        socket.emit('leave_room', {
-            roomId: currentRoom,
-            player: getCurrentPlayerData()
-        });
-    }
-    
-    currentRoom = null;
-    isRoomHost = false;
-    onlineOpponent = null;
-    localStorage.removeItem('xo_room_id');
-    localStorage.removeItem('xo_is_host');
-    localStorage.removeItem('xo_opponent');
-}
+// إرسال ping كل 20 ثانية للحفاظ على الاتصال
+setInterval(keepAlive, 20000);
 
 function showToast(message, type = 'info') {
     console.log('Toast:', message, type);
@@ -301,16 +361,16 @@ function showToast(message, type = 'info') {
     }, 3000);
 }
 
-// تصدير الدوال للاستخدام في ملفات أخرى
+// Export API
 window.socketAPI = {
     initializeSocket,
     createOnlineRoom,
     joinOnlineRoom,
-    sendGameMove,
-    sendChatMessage,
-    leaveRoom,
+    testConnection,
     isConnected: () => socket && socket.connected,
     getCurrentRoom: () => currentRoom,
     isHost: () => isRoomHost,
     getOpponent: () => onlineOpponent
 };
+
+console.log('Socket.js loaded successfully');
