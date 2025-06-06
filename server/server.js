@@ -14,9 +14,11 @@ const io = socketIo(server, {
         allowedHeaders: ["Content-Type"]
     },
     transports: ['websocket', 'polling'],
-    pingTimeout: 60000,
-    pingInterval: 25000,
-    allowEIO3: true
+    pingTimeout: 120000, // زيادة timeout إلى دقيقتين
+    pingInterval: 30000,  // ping كل 30 ثانية
+    allowEIO3: true,
+    upgradeTimeout: 30000,
+    maxHttpBufferSize: 1e6
 });
 
 const PORT = process.env.PORT || 3000;
@@ -57,12 +59,15 @@ class GameRoom {
         this.scores = { [host.id]: 0 };
         this.chatMessages = [];
         this.createdAt = new Date();
+        this.lastActivity = new Date(); // إضافة تتبع آخر نشاط
+        this.hostConnected = true; // إضافة تتبع اتصال المضيف
     }
 
     addPlayer(player) {
         if (this.players.length < 2) {
             this.players.push(player);
             this.scores[player.id] = 0;
+            this.lastActivity = new Date(); // تحديث النشاط
             return true;
         }
         return false;
@@ -71,6 +76,15 @@ class GameRoom {
     removePlayer(playerId) {
         this.players = this.players.filter(p => p.id !== playerId);
         delete this.scores[playerId];
+        this.lastActivity = new Date();
+        
+        // إذا كان المضيف يغادر، تحديد العضو الآخر كمضيف جديد
+        if (this.host.id === playerId && this.players.length > 0) {
+            this.host = this.players[0];
+            this.hostConnected = true;
+        } else if (this.host.id === playerId) {
+            this.hostConnected = false;
+        }
     }
 
     getOpponent(playerId) {
@@ -85,10 +99,30 @@ class GameRoom {
         return this.players.length === 0;
     }
 
+    // تحقق إذا كان يجب حذف الغرفة
+    shouldDelete() {
+        const now = new Date();
+        const inactiveTime = now - this.lastActivity;
+        const roomAge = now - this.createdAt;
+        
+        // حذف الغرفة إذا:
+        // 1. فارغة لأكثر من 5 دقائق
+        // 2. غير نشطة لأكثر من ساعة
+        // 3. عمر الغرفة أكثر من 24 ساعة
+        return (this.isEmpty() && inactiveTime > 5 * 60 * 1000) ||
+               (inactiveTime > 60 * 60 * 1000) ||
+               (roomAge > 24 * 60 * 60 * 1000);
+    }
+
+    updateActivity() {
+        this.lastActivity = new Date();
+    }
+
     resetGame() {
         this.gameBoard = ['', '', '', '', '', '', '', '', ''];
         this.currentPlayer = 'X';
         this.gameActive = true;
+        this.updateActivity();
     }
 
     makeMove(index, playerId) {
@@ -97,6 +131,7 @@ class GameRoom {
             const symbol = player.id === this.host.id ? 'X' : 'O';
 
             this.gameBoard[index] = symbol;
+            this.updateActivity(); // تحديث النشاط
 
             // Check for win or draw
             const winResult = this.checkWin();
@@ -146,6 +181,7 @@ class GameRoom {
             timestamp: new Date()
         };
         this.chatMessages.push(chatMessage);
+        this.updateActivity();
 
         // Keep only last 50 messages
         if (this.chatMessages.length > 50) {
@@ -162,16 +198,18 @@ function generateRoomId() {
 }
 
 function cleanupEmptyRooms() {
+    console.log('Running room cleanup...');
     for (let [roomId, room] of gameRooms) {
-        if (room.isEmpty() || (Date.now() - room.createdAt.getTime()) > 24 * 60 * 60 * 1000) {
+        if (room.shouldDelete()) {
             gameRooms.delete(roomId);
-            console.log(`Cleaned up room: ${roomId}`);
+            console.log(`Cleaned up room: ${roomId} (reason: ${room.isEmpty() ? 'empty' : 'inactive'})`);
         }
     }
+    console.log(`Active rooms after cleanup: ${gameRooms.size}`);
 }
 
-// Clean up empty rooms every hour
-setInterval(cleanupEmptyRooms, 60 * 60 * 1000);
+// Clean up empty rooms every 10 minutes (بدلاً من كل ساعة)
+setInterval(cleanupEmptyRooms, 10 * 60 * 1000);
 
 // Socket connection handling
 io.on('connection', (socket) => {
@@ -183,39 +221,57 @@ io.on('connection', (socket) => {
     // Send connection confirmation
     socket.emit('connected', { message: 'Connected successfully!' });
 
-    // أضف هذين السطرين الجديدين:
-    socket.on('room_created_confirm', (data) => {
-        console.log(`Room creation confirmed for: ${data.roomId}`);
-    });
-
+    // Keep alive handlers
     socket.on('ping', () => {
         socket.emit('pong');
-    });
-socket.on('rejoin_room', (data) => {
-    try {
-        const { roomId, player } = data;
-        const room = gameRooms.get(roomId);
-        
-        if (room) {
-            socket.join(roomId);
-            socket.roomId = roomId;
-            console.log(`${player.name} rejoined room: ${roomId}`);
-            
-            // إرسال حالة اللعبة الحالية
-            socket.emit('game_state', {
-                gameState: {
-                    board: room.gameBoard,
-                    currentPlayer: room.currentPlayer,
-                    active: room.gameActive,
-                    scores: room.scores
-                },
-                players: room.players
-            });
+        // تحديث نشاط الغرفة إذا كان اللاعب في غرفة
+        if (socket.roomId) {
+            const room = gameRooms.get(socket.roomId);
+            if (room) {
+                room.updateActivity();
+            }
         }
-    } catch (error) {
-        console.error('Error rejoining room:', error);
-    }
-});
+    });
+
+    socket.on('room_created_confirm', (data) => {
+        console.log(`Room creation confirmed for: ${data.roomId}`);
+        const room = gameRooms.get(data.roomId);
+        if (room) {
+            room.updateActivity();
+            room.hostConnected = true;
+        }
+    });
+
+    socket.on('rejoin_room', (data) => {
+        try {
+            const { roomId, player } = data;
+            const room = gameRooms.get(roomId);
+            
+            if (room) {
+                socket.join(roomId);
+                socket.roomId = roomId;
+                room.updateActivity();
+                console.log(`${player.name} rejoined room: ${roomId}`);
+                
+                // إرسال حالة اللعبة الحالية
+                socket.emit('game_state', {
+                    gameState: {
+                        board: room.gameBoard,
+                        currentPlayer: room.currentPlayer,
+                        active: room.gameActive,
+                        scores: room.scores
+                    },
+                    players: room.players
+                });
+            } else {
+                socket.emit('room_error', { message: 'Room not found or expired' });
+            }
+        } catch (error) {
+            console.error('Error rejoining room:', error);
+            socket.emit('room_error', { message: 'Failed to rejoin room' });
+        }
+    });
+
     socket.on('create_room', (playerData) => {
         try {
             const roomId = generateRoomId();
@@ -325,10 +381,9 @@ socket.on('rejoin_room', (data) => {
                     message: `${player.name} left the room`
                 });
 
-                // Clean up empty room
+                // لا تحذف الغرفة فوراً، دع cleanup يتعامل معها
                 if (room.isEmpty()) {
-                    gameRooms.delete(roomId);
-                    console.log(`Room ${roomId} deleted - empty`);
+                    console.log(`Room ${roomId} is now empty, will be cleaned up later`);
                 }
             }
         } catch (error) {
@@ -428,7 +483,6 @@ socket.on('rejoin_room', (data) => {
         }
     });
 
-    // Test connection
     socket.on('test_connection', () => {
         socket.emit('test_response', { message: 'Connection working!' });
     });
@@ -443,18 +497,34 @@ socket.on('rejoin_room', (data) => {
                 if (room) {
                     const player = room.players.find(p => p.id === socket.id);
                     if (player) {
-                        room.removePlayer(socket.id);
-
-                        // Notify other players
-                        socket.to(roomId).emit('player_left', { 
-                            player,
-                            message: `${player.name} left the room`
-                        });
-
-                        // Clean up empty room
-                        if (room.isEmpty()) {
-                            gameRooms.delete(roomId);
-                            console.log(`Room ${roomId} deleted - empty after disconnect`);
+                        console.log(`${player.name} disconnected from room: ${roomId}, reason: ${reason}`);
+                        
+                        // إذا كان الانقطاع بسبب transport close، لا تحذف اللاعب فوراً
+                        if (reason === 'transport close' || reason === 'client namespace disconnect') {
+                            console.log(`Temporary disconnect for ${player.name}, keeping in room for reconnection`);
+                            // أعط اللاعب وقت للإعادة الاتصال (30 ثانية)
+                            setTimeout(() => {
+                                const currentRoom = gameRooms.get(roomId);
+                                if (currentRoom && currentRoom.players.find(p => p.id === socket.id)) {
+                                    console.log(`${player.name} did not reconnect, removing from room`);
+                                    currentRoom.removePlayer(socket.id);
+                                    
+                                    // إبلاغ اللاعبين الآخرين
+                                    socket.to(roomId).emit('player_left', { 
+                                        player,
+                                        message: `${player.name} left the room`
+                                    });
+                                }
+                            }, 30000); // 30 ثانية
+                        } else {
+                            // انقطاع دائم، احذف اللاعب فوراً
+                            room.removePlayer(socket.id);
+                            
+                            // Notify other players
+                            socket.to(roomId).emit('player_left', { 
+                                player,
+                                message: `${player.name} left the room`
+                            });
                         }
                     }
                 }
@@ -484,7 +554,9 @@ app.get('/rooms', (req, res) => {
         id,
         players: room.players.length,
         active: room.gameActive,
-        created: room.createdAt
+        created: room.createdAt,
+        lastActivity: room.lastActivity,
+        hostConnected: room.hostConnected
     }));
 
     res.json(roomsInfo);
