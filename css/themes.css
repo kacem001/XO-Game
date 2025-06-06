@@ -1,0 +1,217 @@
+:root {
+    --primary-color: #667eea;
+    --primary-dark: #5a6fd8;
+    --primary-light: rgba(102, 126, 234, 0.1);
+    --secondary-color: #764ba2;
+    --secondary-dark: #6a4190;
+    --text-color: #333333;
+    --text-secondary: #666666;
+    --background-light: #f8f9fa;
+    --success-color: #27ae60;
+    --error-color: #e74c3c;
+    --warning-color: #f39c12;
+}
+
+/* Default Theme */
+.theme-default {
+    --primary-color: #667eea;
+    --primary-dark: #5a6fd8;
+    --primary-light: rgba(102, 126, 234, 0.1);
+    --secondary-color: #764ba2;
+    --secondary-dark: #6a4190;
+    --text-color: #333333;
+    --text-secondary: #666666;
+    --background-light: #f8f9fa;
+    --success-color: #27ae60;
+    --error-color: #e74c3c;
+    --warning-color: #f39c12;
+}
+
+/* Dark Theme */
+.theme-dark {
+    --primary-color: #bb86fc;
+    --primary-dark: #a570e8;
+    --primary-light: rgba(187, 134, 252, 0.1);
+    --secondary-color: #03dac6;
+    --secondary-dark: #02c4b4;
+    --text-color: #ffffff;
+    --text-secondary: #aaaaaa;
+    --background-light: #2a2a2a;
+    --success-color: #4caf50;
+    --error-color: #f44336;
+    --warning-color: #ff9800;
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+}
+
+.theme-dark .container,
+.theme-dark .game-container {
+    background: rgba(30, 30, 30, 0.95);
+}
+
+.theme-dark .mode-card,
+.theme-dark .player-setup,
+.theme-dark .online-setup,
+.theme-dark .players-info,
+.theme-dark .game-board,
+.theme-dark .modal-content {
+    background: #2a2a2a;
+    color: var(--text-color);
+}
+
+.theme-dark .cell {
+    background: #1a1a1a;
+    border-color: #444444;
+    color: var(--text-color);
+}
+
+.theme-dark .cell:hover {
+    border-color: var(--primary-color);
+    background: rgba(187, 134, 252, 0.1);
+}
+
+.theme-dark .header,
+.theme-dark .game-header {
+    background: rgba(30, 30, 30, 0.8);
+}
+
+.theme-dark .footer {
+    background: rgba(0, 0, 0, 0.3);
+    color: var(--text-secondary);
+}
+
+.theme-dark .theme-menu {
+    background: #2a2a2a;
+    border: 1px solid #444444;
+}
+
+.theme-dark .chat-container {
+    background: #2a2a2a;
+}
+
+.theme-dark .chat-message.other {
+    background: #1a1a1a;
+    color: var(--text-color);
+}
+
+/* Ocean Theme */
+.theme-ocean {
+    --primary-color: #0077be;
+    --primary-dark: #005f99;
+    --primary-light: rgba(0, 119, 190, 0.1);
+    --secondary-color: #20b2aa;
+    --secondary-dark: #1a9b95;
+    --text-color: #1e3a8a;
+    --text-secondary: #4682b4;
+    --background-light: #e6f3ff;
+    --success-color: #00c851;
+    --error-color: #ff4444;
+    --warning-color: #ffbb33;
+    background: linear-gradient(135deg, #0077be 0%, #20b2aa 100%);
+}
+
+/* Sunset Theme */
+.theme-sunset {
+    --primary-color: #ff6b6b;
+    --primary-dark: #ee5a52;
+    --primary-light: rgba(255, 107, 107, 0.1);
+    --secondary-color: #feca57;
+    --secondary-dark: #fd9644;
+    --text-color: #8b4513;
+    --text-secondary: #cd853f;
+    --background-light: #fff5ee;
+    --success-color: #ff9ff3;
+    --error-color: #ff3838;
+    --warning-color: #ff9f43;
+    background: linear-gradient(135deg, #ff6b6b 0%, #feca57 100%);
+}
+
+/* Forest Theme */
+.theme-forest {
+    --primary-color: #27ae60;
+    --primary-dark: #229954;
+    --primary-light: rgba(39, 174, 96, 0.1);
+    --secondary-color: #2ecc71;
+    --secondary-dark: #28b463;
+    --text-color: #0d4f3c;
+    --text-secondary: #52796f;
+    --background-light: #f0fff0;
+    --success-color: #2ecc71;
+    --error-color: #e74c3c;
+    --warning-color: #f39c12;
+    background: linear-gradient(135deg, #27ae60 0%, #2ecc71 100%);
+}
+
+/* Neon Theme */
+.theme-neon {
+    --primary-color: #ff0080;
+    --primary-dark: #e6006f;
+    --primary-light: rgba(255, 0, 128, 0.1);
+    --secondary-color: #00ff80;
+    --secondary-dark: #00e673;
+    --text-color: #ffffff;
+    --text-secondary: #cccccc;
+    --background-light: #1a0033;
+    --success-color: #00ff80;
+    --error-color: #ff0040;
+    --warning-color: #ffff00;
+    background: linear-gradient(135deg, #1a0033 0%, #330066 100%);
+}
+
+.theme-neon .container,
+.theme-neon .game-container {
+    background: rgba(26, 0, 51, 0.95);
+    box-shadow: 0 0 50px rgba(255, 0, 128, 0.3);
+}
+
+.theme-neon .mode-card,
+.theme-neon .player-setup,
+.theme-neon .online-setup,
+.theme-neon .players-info,
+.theme-neon .game-board,
+.theme-neon .modal-content {
+    background: #1a0033;
+    color: var(--text-color);
+    border: 2px solid rgba(255, 0, 128, 0.3);
+    box-shadow: 0 0 20px rgba(255, 0, 128, 0.2);
+}
+
+.theme-neon .cell {
+    background: #0d0026;
+    border-color: #ff0080;
+    color: var(--text-color);
+    box-shadow: 0 0 10px rgba(255, 0, 128, 0.3);
+}
+
+.theme-neon .cell:hover {
+    box-shadow: 0 0 20px rgba(255, 0, 128, 0.5);
+}
+
+.theme-neon .header,
+.theme-neon .game-header {
+    background: rgba(26, 0, 51, 0.8);
+}
+
+.theme-neon .theme-menu {
+    background: #1a0033;
+    border: 1px solid #ff0080;
+}
+
+.theme-neon .chat-container {
+    background: #1a0033;
+    border: 2px solid rgba(255, 0, 128, 0.3);
+}
+
+.theme-neon .x-symbol {
+    color: #ff0080;
+    text-shadow: 0 0 10px #ff0080;
+}
+
+.theme-neon .o-symbol {
+    color: #00ff80;
+    text-shadow: 0 0 10px #00ff80;
+}
+
+/* Theme transitions */
+* {
+    transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+}

@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XO Game - Welcome</title>
+    <link rel="stylesheet" href="css/landing.css">
+    <link rel="stylesheet" href="css/themes.css">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+
+<body class="theme-default">
+    <div class="container">
+        <header class="header">
+            <div class="theme-selector">
+                <button class="theme-btn" onclick="toggleThemeMenu()">
+                    <i class="fas fa-palette"></i>
+                </button>
+                <div class="theme-menu" id="themeMenu">
+                    <div class="theme-option" data-theme="default">Default</div>
+                    <div class="theme-option" data-theme="dark">Dark</div>
+                    <div class="theme-option" data-theme="ocean">Ocean</div>
+                    <div class="theme-option" data-theme="sunset">Sunset</div>
+                    <div class="theme-option" data-theme="forest">Forest</div>
+                    <div class="theme-option" data-theme="neon">Neon</div>
+                </div>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <div class="logo-section">
+                <h1 class="game-title">
+                    <span class="x-symbol">X</span>
+                    <span class="o-symbol">O</span>
+                    <span class="game-text">Game</span>
+                </h1>
+                <p class="subtitle">Challenge your friends in the ultimate Tic-Tac-Toe experience!</p>
+            </div>
+
+            <div class="game-modes">
+                <div class="mode-card" onclick="selectMode('local')">
+                    <div class="mode-icon">
+                        <i class="fas fa-users"></i>
+                    </div>
+                    <h3>Local Play</h3>
+                    <p>Play with a friend on the same device</p>
+                </div>
+
+                <div class="mode-card" onclick="selectMode('online')">
+                    <div class="mode-icon">
+                        <i class="fas fa-globe"></i>
+                    </div>
+                    <h3>Online Play</h3>
+                    <p>Create or join rooms to play with friends online</p>
+                </div>
+            </div>
+
+            <div class="player-setup" id="playerSetup" style="display: none;">
+                <h3>Player Setup</h3>
+                <div class="players-container">
+                    <div class="player-config">
+                        <div class="player-avatar" id="player1Avatar">
+                            <i class="fas fa-user"></i>
+                            <input type="file" id="player1Image" accept="image/*" style="display: none;">
+                            <button class="avatar-btn" onclick="document.getElementById('player1Image').click()">
+                                <i class="fas fa-camera"></i>
+                            </button>
+                        </div>
+                        <input type="text" id="player1Name" placeholder="Player 1 Name" maxlength="15">
+                        <span class="player-symbol x-symbol">X</span>
+                    </div>
+
+                    <div class="vs-divider">VS</div>
+
+                    <div class="player-config">
+                        <div class="player-avatar" id="player2Avatar">
+                            <i class="fas fa-user"></i>
+                            <input type="file" id="player2Image" accept="image/*" style="display: none;">
+                            <button class="avatar-btn" onclick="document.getElementById('player2Image').click()">
+                                <i class="fas fa-camera"></i>
+                            </button>
+                        </div>
+                        <input type="text" id="player2Name" placeholder="Player 2 Name" maxlength="15">
+                        <span class="player-symbol o-symbol">O</span>
+                    </div>
+                </div>
+                <button class="start-btn" onclick="startGame()">Start Game</button>
+            </div>
+
+            <div class="online-setup" id="onlineSetup" style="display: none;">
+                <h3>Online Play Setup</h3>
+                <div class="online-player-config">
+                    <div class="player-avatar" id="onlinePlayerAvatar">
+                        <i class="fas fa-user"></i>
+                        <input type="file" id="onlinePlayerImage" accept="image/*" style="display: none;">
+                        <button class="avatar-btn" onclick="document.getElementById('onlinePlayerImage').click()">
+                            <i class="fas fa-camera"></i>
+                        </button>
+                    </div>
+                    <input type="text" id="onlinePlayerName" placeholder="Your Name" maxlength="15">
+                </div>
+
+                <div class="online-options">
+                    <button class="online-btn create-room-btn" onclick="createRoom()">
+                        <i class="fas fa-plus"></i>
+                        Create Room
+                    </button>
+                    <div class="join-room-section">
+                        <input type="text" id="roomCode" placeholder="Enter Room Code" maxlength="6">
+                        <button class="online-btn join-room-btn" onclick="joinRoom()">
+                            <i class="fas fa-sign-in-alt"></i>
+                            Join Room
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <footer class="footer">
+            <p>&copy; 2024 XO Game. Made with ❤️</p>
+        </footer>
+    </div>
+
+    <script src="js/landing.js"></script>
+    <script src="js/themes.js"></script>
+</body>
+
+</html>
